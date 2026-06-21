@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>스케줄표 만들기 도구</title>
-  <link rel="stylesheet" href="css/calendar.css?v=20">
+  <link rel="stylesheet" href="css/calendar.css?v=106">
 </head>
 <body>
   <div class="app-layout">
@@ -22,7 +22,7 @@
             </svg>
           </button>
         </div>
-        <h1 class="app-title">스케줄표 만들기 도구</h1>
+        <input type="text" id="input-document-title" class="app-title-input" placeholder="제목을 입력해주세요." aria-label="파일 제목" maxlength="120" autocomplete="off">
         <div class="header-actions">
           <button type="button" class="header-btn header-btn-new" id="btn-new">새로만들기</button>
           <button type="button" class="header-btn header-btn-save" id="btn-save">저장</button>
@@ -144,13 +144,30 @@
         <section class="tool-section">
           <h2 class="tool-section-title">텍스트 <span class="tool-shortcut" aria-label="단축키 T">T</span></h2>
           <div class="tool-section-body text-tool-body">
+            <div class="label-align-row" id="label-align-options" aria-label="텍스트 정렬">
+              <button type="button" class="label-align-btn" data-tool="label" data-label-align="left" title="왼쪽 정렬" aria-label="왼쪽 정렬">
+                <span class="align-icon align-icon-left" aria-hidden="true">
+                  <span></span><span></span><span></span>
+                </span>
+              </button>
+              <button type="button" class="label-align-btn" data-tool="label" data-label-align="center" title="가운데 정렬" aria-label="가운데 정렬">
+                <span class="align-icon align-icon-center" aria-hidden="true">
+                  <span></span><span></span><span></span>
+                </span>
+              </button>
+              <button type="button" class="label-align-btn" data-tool="label" data-label-align="right" title="오른쪽 정렬" aria-label="오른쪽 정렬">
+                <span class="align-icon align-icon-right" aria-hidden="true">
+                  <span></span><span></span><span></span>
+                </span>
+              </button>
+            </div>
             <div class="color-swatches label-color-swatches" id="label-color-options"></div>
             <div class="label-template-row" id="label-template-options"></div>
           </div>
         </section>
 
         <section class="tool-section">
-          <h2 class="tool-section-title">지우개 <span class="tool-shortcut tool-shortcut-wide" aria-label="마우스 우클릭">마우스 우클릭</span></h2>
+          <h2 class="tool-section-title">지우개 <span class="tool-shortcut tool-shortcut-wide" aria-label="우클릭">우클릭</span></h2>
           <div class="tool-section-body">
             <button type="button" class="tool-icon-btn" data-tool="eraser" title="표시 지우기. 달력에서 우클릭·드래그로도 지울 수 있습니다.">
               <span class="tool-icon tool-icon-eraser" aria-hidden="true"></span>
@@ -222,11 +239,12 @@
     <div class="update-news-body">
       <h3 class="save-dialog-title">업데이트 소식</h3>
       <ol class="update-news-list">
-        <li>텍스트 <strong>복사 붙여넣기</strong>가 가능해졌습니다.</li>
-        <li><strong>방향키</strong>로 텍스트를 움직일 수 있습니다.</li>
-        <li>시작일, 종료일이 추가되었습니다.</li>
-        <li>기본 커서로 컬러박스를 옮길 수 있습니다.</li>
-        <li>가끔 저장이 안 되는 버그를 수정하였습니다.</li>
+        <li><strong>Alt + 드래그</strong> 시 복사 가능</li>
+        <li><strong>Enter</strong>로 텍스트 한 줄 띄어쓰기 가능</li>
+        <li><strong>Shift + 드래그</strong> 시 직선으로만 이동</li>
+        <li>이동 시 <strong>스냅 기능</strong> 추가</li>
+        <li><strong>글자 정렬</strong> 기능 추가</li>
+        <li>상단에 <strong>파일명</strong> 지정 가능</li>
       </ol>
       <label class="update-news-dismiss">
         <input type="checkbox" id="update-news-dismiss">
@@ -238,6 +256,6 @@
     </div>
   </dialog>
 
-  <script src="js/calendar.js?v=35"></script>
+  <script src="js/calendar.js?v=73"></script>
 </body>
 </html>

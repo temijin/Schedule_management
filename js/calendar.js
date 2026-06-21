@@ -6,15 +6,15 @@
   const STORAGE_KEY_LEGACY = 'calendar-markings-v2';
   const STORAGE_KEY_V1 = 'calendar-markings-v1';
   const DEFAULT_MAX_SAVES = 100;
-  const UPDATE_NEWS_VERSION = '2';
+  const UPDATE_NEWS_VERSION = '4';
   const UPDATE_NEWS_DISMISS_KEY = 'calendar-update-news-dismissed';
   const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
   const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
-  const TITLE_ALIGN_CHAR = '만';
   const WEEKDAY_ALIGN_CHAR = '수';
   const SCHEDULE_ALIGN_MOBILE_MAX = 640;
-  const DEFAULT_VIEW_YEAR = 2026;
-  const DEFAULT_VIEW_MONTH = 5;
+  const now = new Date();
+  const DEFAULT_VIEW_YEAR = now.getFullYear();
+  const DEFAULT_VIEW_MONTH = now.getMonth() + 1;
   const DEFAULT_VISIBLE_MONTH_COUNT = 1;
   const MAX_VISIBLE_MONTH_COUNT = 12;
 
@@ -29,13 +29,16 @@
   };
   const SLASH_LABEL_TEXTS = new Set(Object.values(SLASH_MODE_LABELS));
   const SLASH_LABEL_MATCH_EPS = 0.05;
+  const FLOATING_LABEL_SNAP_THRESHOLD_PX = 6;
 
   const DEFAULT_LABEL_STYLE = {
     size: 18,
     weight: 900,
     strokeWidth: 4,
     color: '#111111',
+    align: 'center',
   };
+  const LABEL_ALIGNS = ['left', 'center', 'right'];
 
   const LABEL_TEXT_COLORS = [
     '#111111',
@@ -50,7 +53,7 @@
   /** 글자 템플릿 — defaultColor만 바꾸면 배치 시 기본 색상 변경 */
   const LABEL_TEMPLATES = [
     { text: '시작일', defaultColor: '#111111' },
-    { text: '종료일', defaultColor: '#111111' },
+    { text: '종료일', defaultColor: LABEL_TEXT_COLORS[2] },
   ];
   const LABEL_TEMPLATE_BY_TEXT = Object.fromEntries(
     LABEL_TEMPLATES.map((item) => [item.text, item])
@@ -82,8 +85,8 @@
   const SLASH_MODES = ['holiday', 'postpone', 'plain'];
 
   const state = {
-    viewYear: 2026,
-    viewMonth: 5,
+    viewYear: DEFAULT_VIEW_YEAR,
+    viewMonth: DEFAULT_VIEW_MONTH,
     visibleMonthCount: 1,
     activeTool: 'pointer',
     slashMode: 'holiday',
@@ -94,6 +97,7 @@
     outlineGroups: [],
     floatingLabels: [],
     labelCoordSpace: 'area',
+    documentTitle: '',
   };
 
   let isDragging = false;
@@ -155,6 +159,7 @@
   const toolHintEl = document.getElementById('tool-hint');
   const btnUndo = document.getElementById('btn-undo');
   const btnRedo = document.getElementById('btn-redo');
+  const inputDocumentTitle = document.getElementById('input-document-title');
 
   const labelStyleInputEls = () => [inputLabelSize, inputLabelWeight, inputLabelStrokeWidth];
 
@@ -198,6 +203,18 @@
 
   function daysInMonth(year, month) {
     return new Date(year, month, 0).getDate();
+  }
+
+  function getCurrentViewDate() {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() + 1 };
+  }
+
+  function applyCurrentViewDefaults(target = state) {
+    const currentView = getCurrentViewDate();
+    target.viewYear = currentView.year;
+    target.viewMonth = currentView.month;
+    return target;
   }
 
   function darkenColor(hex, amount) {
@@ -264,13 +281,15 @@
   const DEFAULT_TOOL_MARK_METRICS = {
     boxSize: 34,
     boxBorder: 1,
-    boxRadius: 3,
+    boxRadius: 0,
     slashLine: 2,
     outlineBorder: 1,
   };
 
   const PNG_EXPORT_BORDER_PX = 1;
   const PNG_EXPORT_LABEL_STROKE_PX = 4;
+  const JPG_EXPORT_QUALITY = 0.92;
+  const JPG_EXPORT_SIZE_SCALE = 0.8;
 
   const TOOL_CURSOR_CLASSES = [
     'tool-slash',
@@ -302,12 +321,23 @@
     return Number.isFinite(scale) ? scale : 1.43;
   }
 
+  function getCalendarDisplayScale() {
+    const scale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--calendar-display-scale'));
+    return Number.isFinite(scale) && scale > 0 ? scale : 1;
+  }
+
+  function getCalendarUiScale() {
+    const uiScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--calendar-ui-scale'));
+    if (Number.isFinite(uiScale) && uiScale > 0) return uiScale;
+    return getCalendarScale() * getCalendarDisplayScale();
+  }
+
   function scaledToolMarkFallbacks() {
-    const scale = getCalendarScale();
+    const scale = getCalendarUiScale();
     return {
       boxSize: 40 * scale,
       boxBorder: 1,
-      boxRadius: 3 * scale,
+      boxRadius: 0,
       slashLine: 2,
       outlineBorder: 1,
     };
@@ -317,11 +347,11 @@
     const fallback = scaledToolMarkFallbacks();
     const markInner = stackEl?.querySelector('.day-cell:not(.has-outline) .day-inner');
     if (markInner) {
-      const rect = markInner.getBoundingClientRect();
-      if (rect.width > 0) {
+      const layoutWidth = markInner.offsetWidth;
+      if (layoutWidth > 0) {
         const cs = getComputedStyle(markInner);
         return {
-          boxSize: rect.width,
+          boxSize: layoutWidth,
           boxBorder: fallback.boxBorder,
           boxRadius: parsePx(cs.borderTopLeftRadius, fallback.boxRadius),
           slashLine: fallback.slashLine,
@@ -386,7 +416,7 @@
       ctx.strokeStyle = '#000';
       ctx.lineWidth = border;
       const inset = border / 2;
-      pathRoundRect(ctx, inset, inset, w - border, h - border, 4);
+      pathRoundRect(ctx, inset, inset, w - border, h - border, 0);
       ctx.stroke();
     })}, crosshair`;
     return outlineCursorCss;
@@ -499,6 +529,10 @@
     return DEFAULT_LABEL_STYLE.color;
   }
 
+  function normalizeLabelAlign(align) {
+    return LABEL_ALIGNS.includes(align) ? align : DEFAULT_LABEL_STYLE.align;
+  }
+
   function clampLabelStyle(style) {
     const raw = { ...DEFAULT_LABEL_STYLE, ...style };
     const size = Number(raw.size ?? raw.aboveSize ?? raw.belowSize) || DEFAULT_LABEL_STYLE.size;
@@ -509,6 +543,7 @@
       weight: Math.min(900, Math.max(100, weight)),
       strokeWidth: Math.min(8, Math.max(0, Number(raw.strokeWidth) || 0)),
       color: normalizeHexColor(raw.color),
+      align: normalizeLabelAlign(raw.align),
     };
   }
 
@@ -562,6 +597,10 @@
     return clampLabelSize(label.size ?? state.labelStyle.size);
   }
 
+  function getFloatingLabelAlign(label) {
+    return normalizeLabelAlign(label?.align);
+  }
+
   function applyLabelStyleToDom() {
     const s = state.labelStyle;
     stackEl.style.setProperty('--label-size', `${s.size}px`);
@@ -583,6 +622,7 @@
   function updateLabelStyleFromInputs() {
     recordUndoBeforeChange();
     state.labelStyle = clampLabelStyle({
+      ...state.labelStyle,
       size: inputLabelSize.value,
       weight: inputLabelWeight.value,
       strokeWidth: inputLabelStrokeWidth.value,
@@ -607,6 +647,7 @@
       outlineGroups: deepClone(state.outlineGroups),
       floatingLabels: deepClone(state.floatingLabels),
       labelCoordSpace: state.labelCoordSpace,
+      documentTitle: state.documentTitle,
     };
   }
 
@@ -637,7 +678,9 @@
         x: clamp01(Number(l.x) || 0),
         y: clamp01(Number(l.y) || 0),
         size: clampLabelSize(l.size),
+        align: normalizeLabelAlign(l.align),
       })),
+      documentTitle: String(copy.documentTitle || ''),
     };
   }
 
@@ -654,11 +697,17 @@
     state.slashes = asPlainObject(d.slashes);
     state.colorGroups = sanitizeGroupList(d.colorGroups);
     state.outlineGroups = sanitizeGroupList(d.outlineGroups);
-    state.floatingLabels = sanitizeFloatingLabels(d.floatingLabels);
+    state.floatingLabels = sanitizeFloatingLabels(d.floatingLabels).map((label) => ({
+      ...label,
+      align: normalizeLabelAlign(label.align),
+    }));
     if (d.labelCoordSpace === 'area') {
       state.labelCoordSpace = 'area';
     } else {
       state.labelCoordSpace = 'grid';
+    }
+    if (d.documentTitle != null) {
+      state.documentTitle = String(d.documentTitle);
     }
     migrateLegacyLabels(d.dateLabels);
     migrateLegacySlashes();
@@ -704,7 +753,8 @@
 
   function collectDateGridPositions(key, placement) {
     const [y, m, d] = key.split('-').map(Number);
-    const rowFrac = placement === 'below' ? 0.85 : 0.15;
+    const rowFrac =
+      placement === 'below' ? 0.85 : placement === 'center' ? 0.5 : 0.15;
     const positions = [];
     const seen = new Set();
 
@@ -774,6 +824,138 @@
     return clamp01((headerH + yGrid * gridH) / areaH);
   }
 
+  function getDateAreaCenter(dateKey, panelYear, panelMonth, hasNextPanel) {
+    const [y, m, d] = dateKey.split('-').map(Number);
+    const gridPos = findDateInMonthGrid(y, m, d, panelYear, panelMonth, hasNextPanel);
+    if (!gridPos) return null;
+    const layout = getPngExportLayout();
+    const x = (gridPos.col + 0.5) / 7;
+    const yGrid = (gridPos.row + 0.5) / gridPos.weekCount;
+    return {
+      panel: panelKey(panelYear, panelMonth),
+      x,
+      y: gridFractionYToAreaY(yGrid, gridPos.weekCount, layout),
+    };
+  }
+
+  function getDateCellAreaBounds(panelYear, panelMonth, hasNextPanel, row, col, weekCount) {
+    const layout = getPngExportLayout();
+    const x0 = col / 7;
+    const x1 = (col + 1) / 7;
+    const yGrid0 = row / weekCount;
+    const yGrid1 = (row + 1) / weekCount;
+    return {
+      x0,
+      x1,
+      y0: gridFractionYToAreaY(yGrid0, weekCount, layout),
+      y1: gridFractionYToAreaY(yGrid1, weekCount, layout),
+    };
+  }
+
+  function findAnchorDateForFloatingLabel(label) {
+    if (!label?.panel) return null;
+    const [panelYear, panelMonth] = label.panel.split('-').map(Number);
+    const x = Number(label.x);
+    const y = Number(label.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+    for (const hasNextPanel of [false, true]) {
+      let cells = buildMonthCells(panelYear, panelMonth);
+      cells = trimTrailingWeekWhenNextPanelVisible(cells, hasNextPanel);
+      const weekCount = cells.length / 7;
+
+      for (let idx = 0; idx < cells.length; idx++) {
+        const row = Math.floor(idx / 7);
+        const col = idx % 7;
+        const bounds = getDateCellAreaBounds(
+          panelYear,
+          panelMonth,
+          hasNextPanel,
+          row,
+          col,
+          weekCount
+        );
+        if (x >= bounds.x0 && x <= bounds.x1 && y >= bounds.y0 && y <= bounds.y1) {
+          const cell = cells[idx];
+          return {
+            dateKey: dateKey(cell.year, cell.month, cell.day),
+            hasNextPanel,
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  function captureFloatingLabelAnchor(label) {
+    if (!label || SLASH_LABEL_TEXTS.has(label.text)) return;
+
+    const match = findAnchorDateForFloatingLabel(label);
+    if (!match) {
+      delete label.anchorDate;
+      delete label.anchorOffsetX;
+      delete label.anchorOffsetY;
+      return;
+    }
+
+    const [panelYear, panelMonth] = label.panel.split('-').map(Number);
+    const center = getDateAreaCenter(
+      match.dateKey,
+      panelYear,
+      panelMonth,
+      match.hasNextPanel
+    );
+    if (!center) return;
+
+    label.anchorDate = match.dateKey;
+    label.anchorOffsetX = label.x - center.x;
+    label.anchorOffsetY = label.y - center.y;
+  }
+
+  function applyFloatingLabelAnchor(label) {
+    if (!label?.anchorDate || SLASH_LABEL_TEXTS.has(label.text)) return false;
+
+    const gridPos = dateKeyToGridFraction(label.anchorDate, 'center');
+    if (!gridPos) return false;
+
+    const layout = getPngExportLayout();
+    const weekCount = getWeekCountForPanelKey(gridPos.panel);
+    const areaY = gridFractionYToAreaY(gridPos.y, weekCount, layout);
+
+    label.panel = gridPos.panel;
+    label.x = clamp01(gridPos.x + (Number(label.anchorOffsetX) || 0));
+    label.y = clamp01(areaY + (Number(label.anchorOffsetY) || 0));
+    return true;
+  }
+
+  function syncManualFloatingLabelPositions() {
+    state.floatingLabels.forEach((label) => {
+      if (SLASH_LABEL_TEXTS.has(label.text)) return;
+
+      if (!label.anchorDate) {
+        const match = findAnchorDateForFloatingLabel(label);
+        if (match) {
+          label.anchorDate = match.dateKey;
+          const [panelYear, panelMonth] = label.panel.split('-').map(Number);
+          const center = getDateAreaCenter(
+            match.dateKey,
+            panelYear,
+            panelMonth,
+            match.hasNextPanel
+          );
+          if (center) {
+            label.anchorOffsetX = label.x - center.x;
+            label.anchorOffsetY = label.y - center.y;
+          }
+        }
+      }
+
+      if (label.anchorDate) {
+        applyFloatingLabelAnchor(label);
+      }
+    });
+  }
+
   function migrateFloatingLabelsToAreaCoords() {
     if (state.labelCoordSpace === 'area') return;
     const layout = getPngExportLayout();
@@ -803,6 +985,11 @@
       Math.abs(label.x - pos.x) < SLASH_LABEL_MATCH_EPS &&
       Math.abs(label.y - pos.y) < SLASH_LABEL_MATCH_EPS
     );
+  }
+
+  function getDateKeyForSlashLabel(label) {
+    if (!label || !SLASH_LABEL_TEXTS.has(label.text)) return null;
+    return Object.keys(state.slashes).find((key) => isSlashLabelAtDate(label, key)) || null;
   }
 
   function getSlashLabelsForDate(dateKey) {
@@ -845,6 +1032,7 @@
       text,
       color: '#111',
       size: SLASH_LABEL_FONT_SIZE,
+      align: DEFAULT_LABEL_STYLE.align,
     });
   }
 
@@ -920,6 +1108,7 @@
       text,
       color: color || '#111',
       size: size ?? state.labelStyle.size,
+      align: DEFAULT_LABEL_STYLE.align,
     });
   }
 
@@ -1321,7 +1510,10 @@
     if (!activeSaveId) return false;
     const entry = savesMeta.saves.find((s) => s.id === activeSaveId);
     if (!entry) return false;
-    return !snapshotsEqual(getSnapshot(), entry.data);
+    return (
+      !snapshotsEqual(getSnapshot(), entry.data) ||
+      state.documentTitle.trim() !== String(entry.name || '').trim()
+    );
   }
 
   function updateActiveSave() {
@@ -1329,6 +1521,10 @@
     if (!entry) return;
     entry.data = getSnapshot();
     entry.savedAt = new Date().toISOString();
+    const name = sanitizeFileBaseName(getDefaultSaveBaseName());
+    if (entry.name !== name) {
+      entry.name = name;
+    }
     saveSavesMeta();
     renderHistoryTable();
   }
@@ -1363,9 +1559,13 @@
   }
 
   function namedSave(name) {
+    const saveName = sanitizeFileBaseName(name);
+    state.documentTitle = saveName;
+    syncDocumentTitleInput();
+    updatePageTitle();
     const entry = {
       id: uuid(),
-      name,
+      name: saveName,
       savedAt: new Date().toISOString(),
       data: getSnapshot(),
     };
@@ -1381,7 +1581,10 @@
     if (!entry) return;
     applySnapshot(entry.data);
     activeSaveId = id;
+    state.documentTitle = entry.name || '';
     entry.data = getSnapshot();
+    syncDocumentTitleInput();
+    updatePageTitle();
     saveSavesMeta();
     saveSession();
     render();
@@ -1397,6 +1600,8 @@
   let pendingPngBlob = null;
 
   function getDefaultSaveBaseName() {
+    const title = state.documentTitle.trim();
+    if (title) return title;
     if (activeSaveId) {
       const entry = savesMeta.saves.find((s) => s.id === activeSaveId);
       if (entry?.name) return entry.name;
@@ -1404,8 +1609,8 @@
     return `${state.viewYear}년 ${state.viewMonth}월 일정`;
   }
 
-  function stripPngExtension(name) {
-    return String(name).replace(/\.png$/i, '').trim();
+  function stripImageExtension(name) {
+    return String(name).replace(/\.(png|jpe?g)$/i, '').trim();
   }
 
   function sanitizeFileBaseName(name) {
@@ -1413,20 +1618,26 @@
     return cleaned || getDefaultSaveBaseName();
   }
 
+  function gridColOrigin(gridLeft, col, layout) {
+    return gridLeft + col * (layout.cellW + layout.colGap);
+  }
+
   function getPngExportLayout() {
-    const scale = getCalendarScale();
+    const scale = getCalendarUiScale();
+    const displayScale = getCalendarDisplayScale();
     const m = readToolMarkMetrics();
-    let cellW = 52 * scale;
-    let cellH = 58 * scale;
+    let cellW = (17 + 39) * displayScale;
+    let cellH = (17 + 39) * displayScale;
     let cardPadX = 15 * scale;
     let cardWidth = cellW * 7 + cardPadX * 2;
     let cardPadTop = 20 * scale;
     let cardPadBottom = 12 * scale;
-    let titleFont = 20;
-    let titleGap = 30 * scale;
-    let weekdaysFont = 20;
-    let weekdaysGap = 6 * scale;
-    let textSize = 16 * scale;
+    let titleFont = 17 * displayScale;
+    let titleGap = 39 * displayScale;
+    let weekdaysFont = 17 * displayScale;
+    let weekdaysGap = 19.5 * displayScale;
+    let textSize = 17 * displayScale;
+    let colGap = 0;
     let panelMargin = 12 * scale;
 
     const panel = stackEl?.querySelector('.month-panel');
@@ -1435,15 +1646,19 @@
     const titleEl = panel?.querySelector('.month-title');
     const weekdaysEl = panel?.querySelector('.weekdays');
     const dayNumberEl = panel?.querySelector('.day-number');
+    const gridEl = panel?.querySelector('.days-grid');
+
+    if (gridEl) {
+      const gridStyle = getComputedStyle(gridEl);
+      colGap = parsePx(gridStyle.columnGap, colGap);
+    }
 
     if (cell) {
-      const cellRect = cell.getBoundingClientRect();
-      if (cellRect.width > 0) cellW = cellRect.width;
-      if (cellRect.height > 0) cellH = cellRect.height;
+      if (cell.offsetWidth > 0) cellW = cell.offsetWidth;
+      if (cell.offsetHeight > 0) cellH = cell.offsetHeight;
     }
     if (card) {
-      const cardRect = card.getBoundingClientRect();
-      if (cardRect.width > 0) cardWidth = cardRect.width;
+      if (card.offsetWidth > 0) cardWidth = card.offsetWidth;
       const cardStyle = getComputedStyle(card);
       cardPadTop = parsePx(cardStyle.paddingTop, cardPadTop);
       cardPadBottom = parsePx(cardStyle.paddingBottom, cardPadBottom);
@@ -1467,7 +1682,7 @@
       const firstCard = panels[0]?.querySelector('.month-card');
       const secondCard = panels[1]?.querySelector('.month-card');
       if (firstCard && secondCard) {
-        const gap = secondCard.getBoundingClientRect().top - firstCard.getBoundingClientRect().bottom;
+        const gap = secondCard.offsetTop - (firstCard.offsetTop + firstCard.offsetHeight);
         if (gap > 0) panelMargin = gap;
       }
     }
@@ -1476,7 +1691,8 @@
       scale,
       cellW,
       cellH,
-      calendarWidth: cellW * 7,
+      colGap,
+      calendarWidth: cellW * 7 + colGap * 6,
       cardPadX,
       cardWidth,
       cardPadTop,
@@ -1491,7 +1707,7 @@
       markBoxRadius: m.boxRadius,
       slashLine: m.slashLine,
       outlinePadX: 4,
-      outlinePadY: 6,
+      outlinePadY: 4,
       outlineBorder: PNG_EXPORT_BORDER_PX,
       panelMargin,
       pixelRatio: 2,
@@ -1538,19 +1754,41 @@
     ctx.restore();
   }
 
-  function drawStrokedLabelText(ctx, text, x, y, fontSize, fontWeight, fillColor, strokeWidth) {
+  function drawStrokedLabelText(ctx, text, x, y, fontSize, fontWeight, fillColor, strokeWidth, align = DEFAULT_LABEL_STYLE.align) {
     const font = `${fontWeight} ${fontSize}px "BM JUA", "Malgun Gothic", sans-serif`;
     ctx.font = font;
-    ctx.textAlign = 'center';
+    const normalizedAlign = normalizeLabelAlign(align);
+    ctx.textAlign = normalizedAlign;
     ctx.textBaseline = 'middle';
+    const lines = String(text).split('\n');
+    const lineHeight = fontSize * 1.2;
+    const totalHeight = lines.length * lineHeight;
+    const startY = y - (totalHeight - lineHeight) / 2;
+    const maxLineWidth = lines.reduce(
+      (max, line) => Math.max(max, ctx.measureText(line || '\u00A0').width),
+      0
+    );
+    const drawX =
+      normalizedAlign === 'left'
+        ? x - maxLineWidth / 2
+        : normalizedAlign === 'right'
+          ? x + maxLineWidth / 2
+          : x;
+
     if (strokeWidth > 0) {
       ctx.lineWidth = strokeWidth;
       ctx.strokeStyle = '#fff';
       ctx.lineJoin = 'round';
-      ctx.strokeText(text, x, y);
     }
     ctx.fillStyle = fillColor;
-    ctx.fillText(text, x, y);
+
+    lines.forEach((line, i) => {
+      const lineY = startY + i * lineHeight;
+      if (strokeWidth > 0) {
+        ctx.strokeText(line, drawX, lineY);
+      }
+      ctx.fillText(line, drawX, lineY);
+    });
   }
 
   function getSlashDrawRect(cellX, cellY, layout) {
@@ -1587,14 +1825,14 @@
     ctx.textBaseline = 'top';
     const weekdaysY = originY + layout.cardPadTop + layout.titleFont + layout.titleGap;
     WEEKDAYS.forEach((label, i) => {
-      ctx.fillText(label, gridLeft + i * layout.cellW + layout.cellW / 2, weekdaysY);
+      ctx.fillText(label, gridColOrigin(gridLeft, i, layout) + layout.cellW / 2, weekdaysY);
     });
 
     cells.forEach((cell, index) => {
       const row = Math.floor(index / 7);
       const col = index % 7;
       const key = dateKey(cell.year, cell.month, cell.day);
-      const cellX = gridLeft + col * layout.cellW;
+      const cellX = gridColOrigin(gridLeft, col, layout);
       const cellY = gridTop + row * layout.cellH;
       const colorGroup = getColorGroupFromSnapshot(snap, key);
       const hasOutline = Boolean(getOutlineGroupFromSnapshot(snap, key) && panelMaps.keyToPos[key]);
@@ -1639,13 +1877,14 @@
           minC = Math.min(minC, col);
           maxC = Math.max(maxC, col);
         });
-        const x = gridLeft + minC * layout.cellW + layout.outlinePadX;
+        const x = gridColOrigin(gridLeft, minC, layout) + layout.outlinePadX;
         const y = gridTop + minR * layout.cellH + layout.outlinePadY;
-        const w = (maxC - minC + 1) * layout.cellW - layout.outlinePadX * 2;
+        const w =
+          (maxC - minC + 1) * layout.cellW + (maxC - minC) * layout.colGap - layout.outlinePadX * 2;
         const h = (maxR - minR + 1) * layout.cellH - layout.outlinePadY * 2;
         ctx.strokeStyle = group.borderColor || OUTLINE_BORDER_COLOR;
         ctx.lineWidth = layout.outlineBorder;
-        pathRoundRect(ctx, x, y, w, h, 4);
+        pathRoundRect(ctx, x, y, w, h, 0);
         ctx.stroke();
       });
     });
@@ -1674,7 +1913,8 @@
           fontSize,
           fontWeight,
           fillColor,
-          PNG_EXPORT_LABEL_STROKE_PX
+          PNG_EXPORT_LABEL_STROKE_PX,
+          getFloatingLabelAlign(label)
         );
       });
 
@@ -1706,11 +1946,12 @@
       }
     }
 
+    const exportScale = layout.pixelRatio * JPG_EXPORT_SIZE_SCALE;
     const canvas = document.createElement('canvas');
-    canvas.width = Math.ceil(layout.cardWidth * layout.pixelRatio);
-    canvas.height = Math.ceil(totalHeight * layout.pixelRatio);
+    canvas.width = Math.ceil(layout.cardWidth * exportScale);
+    canvas.height = Math.ceil(totalHeight * exportScale);
     const ctx = canvas.getContext('2d');
-    ctx.scale(layout.pixelRatio, layout.pixelRatio);
+    ctx.scale(exportScale, exportScale);
     ctx.fillStyle = '#f5f5f5';
     ctx.fillRect(0, 0, layout.cardWidth, totalHeight);
 
@@ -1723,44 +1964,55 @@
     }
 
     return new Promise((resolve, reject) => {
-      canvas.toBlob((blob) => {
-        if (blob) resolve(blob);
-        else reject(new Error('PNG 생성 실패'));
-      }, 'image/png');
+      canvas.toBlob(
+        (blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error('JPG 생성 실패'));
+        },
+        'image/jpeg',
+        JPG_EXPORT_QUALITY
+      );
     });
   }
 
   function saveHistoryBeforePng() {
+    const name = sanitizeFileBaseName(getDefaultSaveBaseName());
     if (activeSaveId) {
+      const entry = savesMeta.saves.find((s) => s.id === activeSaveId);
+      if (entry && entry.name !== name) {
+        entry.name = name;
+        saveSavesMeta();
+        renderHistoryTable();
+      }
       updateActiveSave();
     } else {
-      namedSave(sanitizeFileBaseName(getDefaultSaveBaseName()));
+      namedSave(name);
     }
     saveSession();
   }
 
-  async function writePngWithPicker(blob, suggestedBaseName) {
+  async function writeJpgWithPicker(blob, suggestedBaseName) {
     const base = sanitizeFileBaseName(suggestedBaseName);
     const handle = await window.showSaveFilePicker({
-      suggestedName: `${base}.png`,
+      suggestedName: `${base}.jpg`,
       startIn: 'desktop',
       id: 'calendar-schedule-save',
       types: [
         {
-          description: 'PNG 이미지',
-          accept: { 'image/png': ['.png'] },
+          description: 'JPEG 이미지',
+          accept: { 'image/jpeg': ['.jpg', '.jpeg'] },
         },
       ],
     });
     const writable = await handle.createWritable();
     await writable.write(blob);
     await writable.close();
-    return stripPngExtension(handle.name || `${base}.png`);
+    return stripImageExtension(handle.name || `${base}.jpg`);
   }
 
-  function downloadPngBlob(blob, fileName) {
+  function downloadJpgBlob(blob, fileName) {
     const safe = sanitizeFileBaseName(fileName);
-    const fullName = `${safe}.png`;
+    const fullName = `${safe}.jpg`;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1772,6 +2024,9 @@
 
   function syncHistoryAfterPngSave(baseName) {
     const name = sanitizeFileBaseName(baseName);
+    state.documentTitle = name;
+    syncDocumentTitleInput();
+    updatePageTitle();
     if (activeSaveId) {
       const entry = savesMeta.saves.find((s) => s.id === activeSaveId);
       if (entry && entry.name !== name) {
@@ -1810,7 +2065,7 @@
 
     if (typeof window.showSaveFilePicker === 'function') {
       try {
-        const savedName = await writePngWithPicker(blob, suggested);
+        const savedName = await writeJpgWithPicker(blob, suggested);
         syncHistoryAfterPngSave(savedName);
         return;
       } catch (err) {
@@ -1822,12 +2077,17 @@
   }
 
   function createNewCore() {
+    applyCurrentViewDefaults();
     state.slashes = {};
     state.colorGroups = [];
     state.outlineGroups = [];
     state.floatingLabels = [];
     state.visibleMonthCount = 1;
+    state.documentTitle = '';
     activeSaveId = null;
+    activePanelKey = panelKey(state.viewYear, state.viewMonth);
+    syncDocumentTitleInput();
+    updatePageTitle();
     saveSession();
     render();
     renderHistoryTable();
@@ -1867,7 +2127,12 @@
     }
     const colorGroup = getColorGroupForDate(sourceKey);
     if (colorGroup) {
-      return { sourceKey, moveType: 'color', groupId: colorGroup.id };
+      return {
+        sourceKey,
+        moveType: 'color',
+        color: colorGroup.color,
+        borderColor: colorGroup.borderColor,
+      };
     }
     const slash = state.slashes[sourceKey];
     if (slash) {
@@ -1893,9 +2158,20 @@
   }
 
   function clearMarkMovePreview() {
-    document.querySelectorAll('.day-cell.move-preview-cell, .day-cell.move-preview-invalid').forEach((el) => {
-      el.classList.remove('move-preview-cell', 'move-preview-invalid');
-    });
+    document
+      .querySelectorAll(
+        '.day-cell.move-preview-cell, .day-cell.move-preview-invalid, .day-cell.mark-move-preview-color, .day-cell.mark-move-preview-slash'
+      )
+      .forEach((el) => {
+        el.classList.remove(
+          'move-preview-cell',
+          'move-preview-invalid',
+          'mark-move-preview-color',
+          'mark-move-preview-slash'
+        );
+        el.style.removeProperty('--preview-box-bg');
+        el.style.removeProperty('--preview-box-border');
+      });
     document.querySelectorAll('.outline-overlay.mark-move-preview').forEach((el) => {
       el.remove();
     });
@@ -1905,6 +2181,9 @@
     const deltaDays = diffDays(sourceKey, targetKey);
     if (deltaDays === 0) return [];
     if (payload.moveType === 'slash') {
+      return [targetKey];
+    }
+    if (payload.moveType === 'color') {
       return [targetKey];
     }
     const groups = payload.moveType === 'outline' ? state.outlineGroups : state.colorGroups;
@@ -1919,6 +2198,34 @@
       const cell = stackEl.querySelector(`.day-cell[data-date="${key}"]`);
       if (!cell) return;
       cell.classList.add(invalid ? 'move-preview-invalid' : 'move-preview-cell');
+    });
+  }
+
+  function renderColorMovePreview(dates, invalid, payload) {
+    if (!stackEl) return;
+    const color = payload.color || '#c8e6c9';
+    const borderColor = payload.borderColor || darkenColor(color, 40);
+    dates.forEach((key) => {
+      const cell = stackEl.querySelector(`.day-cell[data-date="${key}"]`);
+      if (!cell) return;
+      cell.classList.add(
+        invalid ? 'move-preview-invalid' : 'move-preview-cell',
+        'mark-move-preview-color'
+      );
+      cell.style.setProperty('--preview-box-bg', color);
+      cell.style.setProperty('--preview-box-border', borderColor);
+    });
+  }
+
+  function renderSlashMovePreview(dates, invalid) {
+    if (!stackEl) return;
+    dates.forEach((key) => {
+      const cell = stackEl.querySelector(`.day-cell[data-date="${key}"]`);
+      if (!cell) return;
+      cell.classList.add(
+        invalid ? 'move-preview-invalid' : 'move-preview-cell',
+        'mark-move-preview-slash'
+      );
     });
   }
 
@@ -1963,19 +2270,13 @@
     const invalid = !canApplyMarkMove(markMoveDrag, sourceKey, targetKey);
     if (markMoveDrag.moveType === 'outline') {
       renderOutlineMovePreview(shiftedDates, invalid);
+    } else if (markMoveDrag.moveType === 'color') {
+      renderColorMovePreview(shiftedDates, invalid, markMoveDrag);
+    } else if (markMoveDrag.moveType === 'slash') {
+      renderSlashMovePreview(shiftedDates, invalid);
     } else {
       highlightPreviewCells(shiftedDates, invalid);
     }
-  }
-
-  function canMoveColorGroup(groupId, deltaDays) {
-    const group = state.colorGroups.find((g) => g.id === groupId);
-    if (!group) return false;
-    return group.dates.every((d) => {
-      const key = shiftDateKey(d, deltaDays);
-      const existing = getColorGroupForDate(key);
-      return !existing || existing.id === groupId;
-    });
   }
 
   function canMoveOutlineGroup(groupId, deltaDays) {
@@ -1988,14 +2289,42 @@
     });
   }
 
-  function moveColorGroup(groupId, deltaDays) {
-    const index = state.colorGroups.findIndex((g) => g.id === groupId);
-    if (index < 0 || !canMoveColorGroup(groupId, deltaDays)) return false;
-    const group = state.colorGroups[index];
-    state.colorGroups[index] = {
-      ...group,
-      dates: group.dates.map((d) => shiftDateKey(d, deltaDays)).sort(),
-    };
+  function canMoveColorBox(sourceKey, targetKey) {
+    if (sourceKey === targetKey) return false;
+    return Boolean(getColorGroupForDate(sourceKey) && !getColorGroupForDate(targetKey));
+  }
+
+  function canCopyColorBox(sourceKey, targetKey) {
+    if (sourceKey === targetKey) return false;
+    return Boolean(getColorGroupForDate(sourceKey) && !getColorGroupForDate(targetKey));
+  }
+
+  function moveColorBox(sourceKey, targetKey, payload) {
+    if (!canMoveColorBox(sourceKey, targetKey)) return false;
+    const sourceGroup = getColorGroupForDate(sourceKey);
+    const color = payload.color || sourceGroup.color;
+    const borderColor = payload.borderColor || sourceGroup.borderColor || darkenColor(color, 40);
+    removeDateFromColorGroups(sourceKey);
+    state.colorGroups.push({
+      id: uuid(),
+      color,
+      borderColor,
+      dates: [targetKey],
+    });
+    return true;
+  }
+
+  function copyColorBox(sourceKey, targetKey, payload) {
+    if (!canCopyColorBox(sourceKey, targetKey)) return false;
+    const sourceGroup = getColorGroupForDate(sourceKey);
+    const color = payload.color || sourceGroup.color;
+    const borderColor = payload.borderColor || sourceGroup.borderColor || darkenColor(color, 40);
+    state.colorGroups.push({
+      id: uuid(),
+      color,
+      borderColor,
+      dates: [targetKey],
+    });
     return true;
   }
 
@@ -2007,6 +2336,23 @@
       ...group,
       dates: group.dates.map((d) => shiftDateKey(d, deltaDays)).sort(),
     };
+    return true;
+  }
+
+  function canCopyOutlineGroup(groupId, deltaDays) {
+    const group = state.outlineGroups.find((g) => g.id === groupId);
+    if (!group) return false;
+    return group.dates.every((d) => !getOutlineGroupForDate(shiftDateKey(d, deltaDays)));
+  }
+
+  function copyOutlineGroup(groupId, deltaDays) {
+    const group = state.outlineGroups.find((g) => g.id === groupId);
+    if (!group || !canCopyOutlineGroup(groupId, deltaDays)) return false;
+    state.outlineGroups.push({
+      id: uuid(),
+      borderColor: group.borderColor || OUTLINE_BORDER_COLOR,
+      dates: group.dates.map((d) => shiftDateKey(d, deltaDays)).sort(),
+    });
     return true;
   }
 
@@ -2022,14 +2368,40 @@
     return true;
   }
 
+  function canCopySlash(sourceKey, targetKey) {
+    if (sourceKey === targetKey) return false;
+    return Boolean(state.slashes[sourceKey] && !state.slashes[targetKey]);
+  }
+
+  function copySlash(sourceKey, targetKey, payload) {
+    if (!canCopySlash(sourceKey, targetKey)) return false;
+    const slash = state.slashes[sourceKey];
+    const mode = normalizeSlashMode(payload.slashMode || slash.mode);
+    state.slashes[targetKey] = { mode };
+    syncSlashLabelForDate(targetKey, mode);
+    return true;
+  }
+
   function canApplyMarkMove(payload, sourceKey, targetKey) {
     const deltaDays = diffDays(sourceKey, targetKey);
     if (deltaDays === 0) return false;
+    if (payload.copyMode) {
+      if (payload.moveType === 'outline') {
+        return canCopyOutlineGroup(payload.groupId, deltaDays);
+      }
+      if (payload.moveType === 'color') {
+        return canCopyColorBox(sourceKey, targetKey);
+      }
+      if (payload.moveType === 'slash') {
+        return canCopySlash(sourceKey, targetKey);
+      }
+      return false;
+    }
     if (payload.moveType === 'outline') {
       return canMoveOutlineGroup(payload.groupId, deltaDays);
     }
     if (payload.moveType === 'color') {
-      return canMoveColorGroup(payload.groupId, deltaDays);
+      return canMoveColorBox(sourceKey, targetKey);
     }
     if (payload.moveType === 'slash') {
       return Boolean(state.slashes[sourceKey] && !state.slashes[targetKey]);
@@ -2042,10 +2414,16 @@
     const deltaDays = diffDays(sourceKey, targetKey);
     recordUndoBeforeChange();
     let changed = false;
-    if (payload.moveType === 'outline') {
+    if (payload.copyMode && payload.moveType === 'outline') {
+      changed = copyOutlineGroup(payload.groupId, deltaDays);
+    } else if (payload.copyMode && payload.moveType === 'color') {
+      changed = copyColorBox(sourceKey, targetKey, payload);
+    } else if (payload.copyMode && payload.moveType === 'slash') {
+      changed = copySlash(sourceKey, targetKey, payload);
+    } else if (payload.moveType === 'outline') {
       changed = moveOutlineGroup(payload.groupId, deltaDays);
     } else if (payload.moveType === 'color') {
-      changed = moveColorGroup(payload.groupId, deltaDays);
+      changed = moveColorBox(sourceKey, targetKey, payload);
     } else if (payload.moveType === 'slash') {
       changed = moveSlash(sourceKey, targetKey);
     }
@@ -2055,10 +2433,10 @@
     return true;
   }
 
-  function startMarkMoveDrag(sourceKey) {
+  function startMarkMoveDrag(sourceKey, e) {
     const payload = collectMarkMovePayload(sourceKey);
     if (!payload) return;
-    markMoveDrag = payload;
+    markMoveDrag = { ...payload, copyMode: Boolean(e?.altKey) };
     markMoveDropTargetKey = sourceKey;
     updateMarkMoveDropPreview();
   }
@@ -2265,28 +2643,42 @@
     const fontSize = parseFloat(style.fontSize) || DEFAULT_LABEL_STYLE.size;
     const fontWeight = style.fontWeight || String(state.labelStyle.weight);
     const fontFamily = style.fontFamily || 'inherit';
-    const text = input.value || '\u00A0';
+    const lineHeight = fontSize * 1.2;
+    const lines = (input.value || '\u00A0').split('\n');
 
     if (!floatingLabelMeasureCanvas) {
       floatingLabelMeasureCanvas = document.createElement('canvas');
     }
     const ctx = floatingLabelMeasureCanvas.getContext('2d');
     ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
-    const textWidth = ctx.measureText(text).width;
+    let maxWidth = 0;
+    lines.forEach((line) => {
+      const lineText = line || '\u00A0';
+      maxWidth = Math.max(maxWidth, ctx.measureText(lineText).width);
+    });
 
-    const padX = 8;
+    const strokeWidth = stackEl
+      ? parseFloat(getComputedStyle(stackEl).getPropertyValue('--user-label-stroke-width')) ||
+        state.labelStyle.strokeWidth ||
+        0
+      : state.labelStyle.strokeWidth || 0;
+    const padX = 8 + strokeWidth * 2 + 4;
     const border = 2;
     const minWidth = fontSize * 1.5;
-    input.style.width = `${Math.ceil(Math.max(minWidth, textWidth + padX + border))}px`;
+    input.style.width = `${Math.ceil(Math.max(minWidth, maxWidth + padX + border))}px`;
+    input.style.height = `${Math.ceil(lines.length * lineHeight + border)}px`;
   }
 
   function createFloatingLabelInputElement(label) {
-    const input = document.createElement('input');
-    input.type = 'text';
+    const input = document.createElement('textarea');
     input.className = 'floating-label-input';
+    input.draggable = false;
+    input.rows = 1;
+    input.wrap = 'off';
     input.value = label.text;
     input.style.color = label.color || '#111';
     input.style.fontSize = `${getFloatingLabelSize(label)}px`;
+    input.style.textAlign = getFloatingLabelAlign(label);
     syncFloatingLabelInputWidth(input);
     return input;
   }
@@ -2296,16 +2688,20 @@
     input.dataset.bound = '1';
     input.addEventListener('input', () => syncFloatingLabelInputWidth(input));
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
+      if (e.key === 'Escape') {
         e.preventDefault();
         commitFloatingLabelEdit();
-      } else if (e.key === 'Escape') {
+      } else if (
+        e.code === 'NumpadEnter' ||
+        (e.key === 'Enter' && (e.ctrlKey || e.metaKey))
+      ) {
         e.preventDefault();
-        cancelFloatingLabelEdit();
+        commitFloatingLabelEdit();
       }
       e.stopPropagation();
     });
     input.addEventListener('mousedown', (e) => e.stopPropagation());
+    input.addEventListener('dragstart', (e) => e.preventDefault());
     input.addEventListener('blur', () => {
       const blurId = id;
       setTimeout(() => {
@@ -2324,6 +2720,7 @@
     textEl.textContent = label.text;
     textEl.style.color = label.color || '#111';
     textEl.style.fontSize = `${getFloatingLabelSize(label)}px`;
+    textEl.style.textAlign = getFloatingLabelAlign(label);
     if (input) {
       input.replaceWith(textEl);
     } else {
@@ -2331,6 +2728,7 @@
       if (existing) {
         existing.textContent = label.text;
         existing.style.color = normalizeHexColor(label.color);
+        existing.style.textAlign = getFloatingLabelAlign(label);
       } else {
         wrap.insertBefore(textEl, wrap.firstChild);
       }
@@ -2347,6 +2745,7 @@
 
     const label = getFloatingLabelById(id);
     if (!label) return;
+    if (SLASH_LABEL_TEXTS.has(label.text)) return;
 
     editingFloatingLabelId = id;
     selectFloatingLabel(id);
@@ -2391,18 +2790,6 @@
     clearFloatingLabelSelection();
   }
 
-  function cancelFloatingLabelEdit() {
-    if (!editingFloatingLabelId) return;
-    const id = editingFloatingLabelId;
-    const label = getFloatingLabelById(id);
-    const wrap = stackEl.querySelector(`.floating-label-wrap[data-id="${id}"]`);
-    editingFloatingLabelId = null;
-    if (wrap && label) {
-      restoreFloatingLabelText(wrap, label);
-    }
-    clearFloatingLabelSelection();
-  }
-
   function focusEditingFloatingLabelInput() {
     if (!editingFloatingLabelId) return;
     const wrap = stackEl.querySelector(`.floating-label-wrap[data-id="${editingFloatingLabelId}"]`);
@@ -2417,14 +2804,16 @@
     const isEditing = label.id === editingFloatingLabelId;
     const wrap = document.createElement('div');
     wrap.className = 'floating-label-wrap';
-    if (label.id === selectedFloatingLabelId || isEditing) {
-      wrap.classList.add('is-selected');
-    }
-    if (isEditing) {
-      wrap.classList.add('is-editing');
-    }
-    if (SLASH_LABEL_TEXTS.has(label.text)) {
+    const isSlashLabel = SLASH_LABEL_TEXTS.has(label.text);
+    if (isSlashLabel) {
       wrap.classList.add('is-slash-label');
+    } else {
+      if (label.id === selectedFloatingLabelId || isEditing) {
+        wrap.classList.add('is-selected');
+      }
+      if (isEditing) {
+        wrap.classList.add('is-editing');
+      }
     }
     wrap.dataset.id = label.id;
     wrap.style.left = `${label.x * 100}%`;
@@ -2438,6 +2827,7 @@
       textEl.textContent = label.text;
       textEl.style.color = label.color || '#111';
       textEl.style.fontSize = `${getFloatingLabelSize(label)}px`;
+      textEl.style.textAlign = getFloatingLabelAlign(label);
       wrap.appendChild(textEl);
     }
 
@@ -2487,7 +2877,7 @@
 
   function handleFloatingLabelOutsidePointer(e) {
     if (e.target.closest('.text-tool-body')) {
-      if (e.target.closest('.swatch[data-color]')) {
+      if (e.target.closest('.swatch[data-color], .label-align-btn[data-label-align]')) {
         e.preventDefault();
       }
       return;
@@ -2550,6 +2940,7 @@
       text: label.text,
       color: label.color,
       size: getFloatingLabelSize(label),
+      align: getFloatingLabelAlign(label),
       panel: label.panel,
       x: label.x,
       y: label.y,
@@ -2573,6 +2964,7 @@
       text: copiedFloatingLabel.text,
       color: copiedFloatingLabel.color,
       size: copiedFloatingLabel.size,
+      align: copiedFloatingLabel.align,
     });
     pasteRepeatCount += 1;
     selectedFloatingLabelId = id;
@@ -2627,10 +3019,163 @@
     };
   }
 
+  function labelCoordsToClientPoint(label) {
+    const monthGrid = getMonthGridForPanelKey(label.panel);
+    const rect = monthGrid?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    return {
+      x: rect.left + clamp01(Number(label.x) || 0) * rect.width,
+      y: rect.top + clamp01(Number(label.y) || 0) * rect.height,
+      monthGrid,
+      rect,
+    };
+  }
+
   function getPanelKeyFromMonthGrid(monthGrid) {
     const panel = monthGrid.closest('.month-panel');
     if (!panel) return null;
     return panelKey(Number(panel.dataset.year), Number(panel.dataset.month));
+  }
+
+  function getCalendarCenterSnapLines(monthGrid) {
+    const rects = getLabelAreaRects(monthGrid);
+    const panel = getPanelKeyFromMonthGrid(monthGrid);
+    if (!rects || !panel || rects.areaRect.width <= 0 || rects.areaRect.height <= 0) return [];
+
+    const gridCenterY =
+      (rects.gridWrapRect.top + rects.gridWrapRect.height / 2 - rects.areaRect.top) /
+      rects.areaRect.height;
+    const yValue = clamp01(gridCenterY);
+
+    return [
+      {
+        axis: 'x',
+        value: 0.5,
+        clientValue: rects.areaRect.left + rects.areaRect.width * 0.5,
+        panel,
+        source: 'calendar',
+      },
+      {
+        axis: 'y',
+        value: yValue,
+        clientValue: rects.areaRect.top + rects.areaRect.height * yValue,
+        panel,
+        source: 'calendar',
+      },
+    ];
+  }
+
+  function getColorBoxSnapCandidates() {
+    if (!stackEl) return [];
+    const candidates = [];
+    stackEl.querySelectorAll('.day-cell.has-color').forEach((cell) => {
+      const monthGrid = cell.closest('.month-grid');
+      const panel = monthGrid ? getPanelKeyFromMonthGrid(monthGrid) : null;
+      const boxEl = cell.querySelector('.day-inner');
+      const boxRect = boxEl?.getBoundingClientRect();
+      const areaRect = monthGrid?.getBoundingClientRect();
+      if (!panel || !boxRect || !areaRect || areaRect.width <= 0 || areaRect.height <= 0) return;
+
+      const clientX = boxRect.left + boxRect.width / 2;
+      const clientY = boxRect.top + boxRect.height / 2;
+      candidates.push({
+        axis: 'x',
+        value: clamp01((clientX - areaRect.left) / areaRect.width),
+        clientValue: clientX,
+        panel,
+        source: 'color',
+      });
+      candidates.push({
+        axis: 'y',
+        value: clamp01((clientY - areaRect.top) / areaRect.height),
+        clientValue: clientY,
+        panel,
+        source: 'color',
+      });
+    });
+    return candidates;
+  }
+
+  function getFloatingLabelSnapCandidates(activeLabel, monthGrid) {
+    const panel = getPanelKeyFromMonthGrid(monthGrid);
+    if (!panel) return [];
+    const candidates = [...getCalendarCenterSnapLines(monthGrid), ...getColorBoxSnapCandidates()];
+
+    state.floatingLabels.forEach((label) => {
+      if (label.id === activeLabel.id || !label.text) return;
+      const point = labelCoordsToClientPoint(label);
+      if (!point) return;
+      const candidatePanel = label.panel;
+      candidates.push({
+        axis: 'x',
+        value: clamp01(Number(label.x) || 0),
+        clientValue: point.x,
+        panel: candidatePanel,
+        source: 'label',
+      });
+      candidates.push({
+        axis: 'y',
+        value: clamp01(Number(label.y) || 0),
+        clientValue: point.y,
+        panel: candidatePanel,
+        source: 'label',
+      });
+    });
+
+    return candidates;
+  }
+
+  function getSnappedFloatingLabelCoords(label, coords, monthGrid, options = {}) {
+    const rect = monthGrid.getBoundingClientRect();
+    const axes = options.axes || ['x', 'y'];
+    const snapped = { ...coords };
+    const guides = [];
+    const best = { x: null, y: null };
+
+    getFloatingLabelSnapCandidates(label, monthGrid).forEach((candidate) => {
+      if (!axes.includes(candidate.axis)) return;
+      const currentClient =
+        candidate.axis === 'x'
+          ? rect.left + coords.x * rect.width
+          : rect.top + coords.y * rect.height;
+      const distancePx = Math.abs(currentClient - candidate.clientValue);
+      if (distancePx > FLOATING_LABEL_SNAP_THRESHOLD_PX) return;
+      const current = best[candidate.axis];
+      if (!current || distancePx < current.distancePx) {
+        best[candidate.axis] = { ...candidate, distancePx };
+      }
+    });
+
+    ['x', 'y'].forEach((axis) => {
+      const match = best[axis];
+      if (!match) return;
+      snapped[axis] =
+        axis === 'x'
+          ? clamp01((match.clientValue - rect.left) / rect.width)
+          : clamp01((match.clientValue - rect.top) / rect.height);
+      guides.push({ axis, value: match.value, panel: match.panel });
+    });
+
+    return { coords: snapped, guides };
+  }
+
+  function getConstrainedFloatingLabelCoords(coords, drag, e, panelKeyStr) {
+    if (!e.shiftKey || panelKeyStr !== drag.startPanel) {
+      return { coords, axes: ['x', 'y'] };
+    }
+
+    const horizontal = Math.abs(e.clientX - drag.startX) >= Math.abs(e.clientY - drag.startY);
+    if (horizontal) {
+      return {
+        coords: { ...coords, y: clamp01(Number(drag.startLabelY) || 0) },
+        axes: ['x'],
+      };
+    }
+
+    return {
+      coords: { ...coords, x: clamp01(Number(drag.startLabelX) || 0) },
+      axes: ['y'],
+    };
   }
 
   function getDaysGridWrapAtPoint(clientX, clientY) {
@@ -2676,6 +3221,26 @@
     }
   }
 
+  function clearFloatingLabelSnapGuides() {
+    stackEl.querySelectorAll('.floating-label-snap-guide').forEach((el) => el.remove());
+  }
+
+  function renderFloatingLabelSnapGuides(guides) {
+    clearFloatingLabelSnapGuides();
+    guides.forEach((guide) => {
+      const layer = getLabelsLayerForPanelKey(guide.panel);
+      if (!layer) return;
+      const el = document.createElement('div');
+      el.className = `floating-label-snap-guide snap-guide-${guide.axis}`;
+      if (guide.axis === 'x') {
+        el.style.left = `${guide.value * 100}%`;
+      } else {
+        el.style.top = `${guide.value * 100}%`;
+      }
+      layer.appendChild(el);
+    });
+  }
+
   function setFloatingLabelPositionFromPoint(label, clientX, clientY) {
     const monthGrid = getMonthGridAtPoint(clientX, clientY);
     if (!monthGrid) return false;
@@ -2693,6 +3258,37 @@
     return true;
   }
 
+  function setFloatingLabelPositionFromPointWithSnap(label, e, drag) {
+    const monthGrid = getMonthGridAtPoint(e.clientX, e.clientY);
+    if (!monthGrid) {
+      clearFloatingLabelSnapGuides();
+      return false;
+    }
+
+    const coords = pointToLabelCoords(e.clientX, e.clientY, monthGrid);
+    if (!coords) {
+      clearFloatingLabelSnapGuides();
+      return false;
+    }
+
+    const key = getPanelKeyFromMonthGrid(monthGrid);
+    if (!key) {
+      clearFloatingLabelSnapGuides();
+      return false;
+    }
+
+    const constrained = getConstrainedFloatingLabelCoords(coords, drag, e, key);
+    const snapped = getSnappedFloatingLabelCoords(label, constrained.coords, monthGrid, {
+      axes: constrained.axes,
+    });
+    label.panel = key;
+    label.x = snapped.coords.x;
+    label.y = snapped.coords.y;
+    ensureFloatingLabelInCorrectLayer(label);
+    renderFloatingLabelSnapGuides(snapped.guides);
+    return true;
+  }
+
   function updateFloatingLabelElement(label) {
     ensureFloatingLabelInCorrectLayer(label);
     const el = stackEl.querySelector(`.floating-label-wrap[data-id="${label.id}"]`);
@@ -2701,15 +3297,18 @@
     el.style.top = `${label.y * 100}%`;
     const fontSize = `${getFloatingLabelSize(label)}px`;
     const color = label.color || DEFAULT_LABEL_STYLE.color;
+    const align = getFloatingLabelAlign(label);
     const textEl = el.querySelector('.floating-label-text');
     const inputEl = el.querySelector('.floating-label-input');
     if (textEl) {
       textEl.style.fontSize = fontSize;
       textEl.style.color = color;
+      textEl.style.textAlign = align;
     }
     if (inputEl) {
       inputEl.style.fontSize = fontSize;
       inputEl.style.color = color;
+      inputEl.style.textAlign = align;
       syncFloatingLabelInputWidth(inputEl);
     }
   }
@@ -2757,6 +3356,7 @@
 
     recordUndoBeforeChange();
     if (!nudgeFloatingLabel(label, dx, dy)) return false;
+    captureFloatingLabelAnchor(label);
     saveSession();
     e.preventDefault();
     return true;
@@ -2774,7 +3374,7 @@
 
     const id = uuid();
     recordUndoBeforeChange();
-    state.floatingLabels.push({
+    const label = {
       id,
       panel: panelKey(year, month),
       x: coords.x,
@@ -2782,7 +3382,10 @@
       text: '',
       color: state.labelStyle.color,
       size: state.labelStyle.size,
-    });
+      align: state.labelStyle.align,
+    };
+    captureFloatingLabelAnchor(label);
+    state.floatingLabels.push(label);
     selectedFloatingLabelId = id;
     editingFloatingLabelId = id;
     saveSession();
@@ -2803,16 +3406,55 @@
   }
 
   function startFloatingLabelDrag(e, wrapEl) {
+    if (isFloatingLabelEditing()) return;
     e.preventDefault();
     e.stopPropagation();
-    const id = wrapEl.dataset.id;
-    const label = getFloatingLabelById(id);
+    let id = wrapEl.dataset.id;
+    let label = getFloatingLabelById(id);
     if (!label) return;
+    let undoRecorded = false;
+
+    if (e.altKey && SLASH_LABEL_TEXTS.has(label.text)) {
+      const sourceKey = getDateKeyForSlashLabel(label);
+      if (sourceKey) {
+        clearFloatingLabelSelection();
+        startMarkMoveDrag(sourceKey, e);
+      }
+      return;
+    }
+
+    if (e.altKey) {
+      recordUndoBeforeChange();
+      undoRecorded = true;
+      id = uuid();
+      label = {
+        id,
+        panel: label.panel,
+        x: label.x,
+        y: label.y,
+        text: label.text,
+        color: label.color,
+        size: getFloatingLabelSize(label),
+        align: getFloatingLabelAlign(label),
+        anchorDate: label.anchorDate,
+        anchorOffsetX: label.anchorOffsetX,
+        anchorOffsetY: label.anchorOffsetY,
+      };
+      state.floatingLabels.push(label);
+      selectedFloatingLabelId = id;
+      render();
+    }
 
     floatingLabelDrag = {
       id,
       startX: e.clientX,
       startY: e.clientY,
+      startLabelX: label.x,
+      startLabelY: label.y,
+      startPanel: label.panel,
+      undoRecorded,
+      copyMode: undoRecorded,
+      sourceId: wrapEl.dataset.id,
       moved: false,
       onText: Boolean(e.target.closest('.floating-label-text')),
       eraserIntent: isEraserPointer(e) || state.activeTool === 'eraser',
@@ -2846,10 +3488,15 @@
     if (!floatingLabelDrag.moved) {
       if (Math.abs(pixelDx) + Math.abs(pixelDy) < 4) return;
       floatingLabelDrag.moved = true;
-      recordUndoBeforeChange();
+      if (!floatingLabelDrag.undoRecorded) {
+        recordUndoBeforeChange();
+        floatingLabelDrag.undoRecorded = true;
+      }
     }
 
-    if (setFloatingLabelPositionFromPoint(label, e.clientX, e.clientY)) {
+    const moved = setFloatingLabelPositionFromPointWithSnap(label, e, floatingLabelDrag);
+
+    if (moved) {
       updateFloatingLabelElement(label);
     }
   }
@@ -2875,8 +3522,19 @@
     if (!floatingLabelDrag) return;
     const drag = floatingLabelDrag;
     floatingLabelDrag = null;
+    clearFloatingLabelSnapGuides();
+
+    if (drag.copyMode && !drag.moved) {
+      state.floatingLabels = state.floatingLabels.filter((label) => label.id !== drag.id);
+      selectedFloatingLabelId = drag.sourceId;
+      if (drag.undoRecorded) undoStack.pop();
+      render();
+      return;
+    }
 
     if (drag.moved) {
+      const label = getFloatingLabelById(drag.id);
+      if (label) captureFloatingLabelAnchor(label);
       saveSession();
       return;
     }
@@ -2900,7 +3558,26 @@
     saveSession();
   }
 
-  function renderMonthPanel(year, month, hasNextPanel) {
+  function createMonthPanelRemoveButton() {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'month-panel-remove-btn';
+    btn.textContent = '×';
+    btn.title = '마지막 달 제거';
+    btn.setAttribute('aria-label', '마지막 달 제거');
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (state.visibleMonthCount > 1) {
+        recordUndoBeforeChange();
+        state.visibleMonthCount--;
+        saveSession();
+        render();
+      }
+    });
+    return btn;
+  }
+
+  function renderMonthPanel(year, month, hasNextPanel, { showRemoveBtn = false } = {}) {
     const panel = document.createElement('section');
     panel.className = 'month-panel';
     panel.dataset.year = year;
@@ -2968,6 +3645,10 @@
     card.className = 'month-card';
     card.appendChild(monthGrid);
     panel.appendChild(card);
+    if (showRemoveBtn) {
+      panel.classList.add('month-panel--has-remove');
+      panel.appendChild(createMonthPanelRemoveButton());
+    }
     return panel;
   }
 
@@ -2975,30 +3656,12 @@
     const controls = document.createElement('div');
     controls.className = 'panel-controls';
 
-    const minusBtn = document.createElement('button');
-    minusBtn.type = 'button';
-    minusBtn.className = 'panel-btn-minus';
-    minusBtn.textContent = '−';
-    minusBtn.title = '마지막 달 접기';
-    minusBtn.disabled = state.visibleMonthCount <= 1;
-    minusBtn.addEventListener('click', () => {
-      if (state.visibleMonthCount > 1) {
-        recordUndoBeforeChange();
-        state.visibleMonthCount--;
-        saveSession();
-        render();
-      }
-    });
-
     const plusBtn = document.createElement('button');
     plusBtn.type = 'button';
     plusBtn.className = 'add-month-btn';
     plusBtn.title = '다음 달 추가';
     plusBtn.setAttribute('aria-label', '다음 달 추가');
-    plusBtn.innerHTML = `
-      <span class="add-month-icon">+</span>
-      <span class="add-month-label">다음 달 추가</span>
-    `;
+    plusBtn.textContent = '+ 다음달 추가';
     plusBtn.addEventListener('click', () => {
       recordUndoBeforeChange();
       state.visibleMonthCount++;
@@ -3006,22 +3669,9 @@
       render();
     });
 
-    if (state.visibleMonthCount > 1) controls.appendChild(minusBtn);
     controls.appendChild(plusBtn);
 
     return controls;
-  }
-
-  function getCharCenterX(el, char) {
-    const textNode = el.firstChild;
-    if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return null;
-    const index = textNode.textContent.indexOf(char);
-    if (index === -1) return null;
-    const range = document.createRange();
-    range.setStart(textNode, index);
-    range.setEnd(textNode, index + char.length);
-    const rect = range.getBoundingClientRect();
-    return rect.left + rect.width / 2;
   }
 
   function getElementCenterX(el) {
@@ -3029,9 +3679,36 @@
     return rect.left + rect.width / 2;
   }
 
+  function syncDocumentTitleInput() {
+    if (!inputDocumentTitle) return;
+    if (inputDocumentTitle.value !== state.documentTitle) {
+      inputDocumentTitle.value = state.documentTitle;
+    }
+  }
+
+  function updatePageTitle() {
+    document.title = state.documentTitle.trim() || '스케줄표 만들기 도구';
+  }
+
+  function syncDocumentTitleFromActiveSave() {
+    if (!activeSaveId) return;
+    const entry = savesMeta.saves.find((s) => s.id === activeSaveId);
+    if (entry?.name) {
+      state.documentTitle = entry.name;
+    }
+  }
+
+  function commitDocumentTitleFromInput() {
+    if (!inputDocumentTitle) return;
+    state.documentTitle = inputDocumentTitle.value.trim();
+    updatePageTitle();
+    saveSession();
+    scheduleAlignScheduleGroup();
+  }
+
   function alignScheduleGroup() {
     const scheduleGroup = document.querySelector('.schedule-group');
-    const titleEl = document.querySelector('.app-title');
+    const titleEl = inputDocumentTitle;
     if (!scheduleGroup || !titleEl) return;
 
     if (window.innerWidth <= SCHEDULE_ALIGN_MOBILE_MAX) {
@@ -3042,7 +3719,7 @@
     scheduleGroup.style.setProperty('--schedule-align-offset', '0px');
     void scheduleGroup.offsetWidth;
 
-    const titleCenterX = getCharCenterX(titleEl, TITLE_ALIGN_CHAR);
+    const titleCenterX = getElementCenterX(titleEl);
     const weekdayRow = document.querySelector('.weekdays');
     const suSpan = weekdayRow
       ? Array.from(weekdayRow.querySelectorAll('span')).find(
@@ -3067,14 +3744,17 @@
 
   function render() {
     clearMarkMovePreview();
+    clearFloatingLabelSnapGuides();
     sanitizeViewState();
     syncAllSlashLabels();
+    syncManualFloatingLabelPositions();
     stackEl.innerHTML = '';
 
     for (let i = 0; i < state.visibleMonthCount; i++) {
       const { year, month } = addMonths(state.viewYear, state.viewMonth, i);
       const hasNextPanel = i < state.visibleMonthCount - 1;
-      stackEl.appendChild(renderMonthPanel(year, month, hasNextPanel));
+      const showRemoveBtn = state.visibleMonthCount > 1 && i === state.visibleMonthCount - 1;
+      stackEl.appendChild(renderMonthPanel(year, month, hasNextPanel, { showRemoveBtn }));
     }
 
     if (panelControlsRootEl) {
@@ -3083,7 +3763,7 @@
     }
 
     inputYear.value = state.viewYear;
-    selectMonth.value = state.viewMonth;
+    selectMonth.value = String(state.viewMonth);
     syncLabelStyleInputs();
     applyLabelStyleToDom();
     updateToolbar();
@@ -3115,6 +3795,17 @@
     return normalizeHexColor(getActiveLabelColor());
   }
 
+  function getDisplayedLabelAlign() {
+    const id = selectedFloatingLabelId || editingFloatingLabelId;
+    if (id) {
+      const label = getFloatingLabelById(id);
+      if (label && !SLASH_LABEL_TEXTS.has(label.text)) {
+        return getFloatingLabelAlign(label);
+      }
+    }
+    return normalizeLabelAlign(state.labelStyle.align);
+  }
+
   function applyLabelColor(color) {
     const normalized = normalizeHexColor(
       clampLabelStyle({ ...state.labelStyle, color }).color
@@ -3135,6 +3826,27 @@
       }
     }
 
+    updateToolbar();
+  }
+
+  function applyLabelAlign(align) {
+    const normalized = normalizeLabelAlign(align);
+    state.labelStyle.align = normalized;
+
+    const targetId = selectedFloatingLabelId || editingFloatingLabelId;
+    if (targetId) {
+      const label = getFloatingLabelById(targetId);
+      if (label && !SLASH_LABEL_TEXTS.has(label.text)) {
+        const currentAlign = getFloatingLabelAlign(label);
+        if (currentAlign !== normalized) {
+          recordUndoBeforeChange();
+          label.align = normalized;
+          updateFloatingLabelElement(label);
+        }
+      }
+    }
+
+    saveSession();
     updateToolbar();
   }
 
@@ -3228,6 +3940,7 @@
       text,
       color: getLabelTemplateDefaultColor(text) || DEFAULT_LABEL_STYLE.color,
       size: state.labelStyle.size,
+      align: state.labelStyle.align,
     });
     selectedFloatingLabelId = id;
     editingFloatingLabelId = null;
@@ -3278,6 +3991,23 @@
     });
   }
 
+  function bindLabelAlignButtons() {
+    const root = document.getElementById('label-align-options');
+    if (!root) return;
+
+    if (root.dataset.bound === '1') return;
+    root.dataset.bound = '1';
+    root.addEventListener('mousedown', (e) => {
+      const btn = e.target.closest('.label-align-btn[data-label-align]');
+      if (!btn) return;
+      e.preventDefault();
+      state.activeTool = 'label';
+      hideColorBoxPreview();
+      applyLabelAlign(btn.dataset.labelAlign);
+      syncCalendarToolCursor();
+    });
+  }
+
   function isToolControlActive(btn) {
     const tool = btn.dataset.tool;
     if (tool === 'slash') {
@@ -3289,11 +4019,17 @@
     if (tool === 'label' && btn.dataset.color) {
       return state.activeTool === 'label' && btn.dataset.color === getDisplayedLabelColor();
     }
+    if (tool === 'label' && btn.dataset.labelAlign) {
+      return state.activeTool === 'label' && btn.dataset.labelAlign === getDisplayedLabelAlign();
+    }
+    if (tool === 'label' && btn.dataset.labelTemplate) {
+      return false;
+    }
     return state.activeTool === tool;
   }
 
   function updateToolbar() {
-    document.querySelectorAll('.tool-icon-btn, .swatch[data-tool], .label-template-btn').forEach((btn) => {
+    document.querySelectorAll('.tool-icon-btn, .swatch[data-tool], .label-template-btn, .label-align-btn').forEach((btn) => {
       btn.classList.toggle('active', isToolControlActive(btn));
     });
 
@@ -3509,7 +4245,17 @@
     document.getElementById('btn-new').addEventListener('click', createNew);
     document.getElementById('btn-save').addEventListener('click', saveCurrent);
 
+    inputDocumentTitle?.addEventListener('input', commitDocumentTitleFromInput);
+    inputDocumentTitle?.addEventListener('change', commitDocumentTitleFromInput);
+    inputDocumentTitle?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        inputDocumentTitle.blur();
+      }
+    });
+
     bindLabelColorSwatches();
+    bindLabelAlignButtons();
     bindLabelTemplates();
 
     document.querySelectorAll('[data-tool]').forEach((btn) => {
@@ -3562,7 +4308,7 @@
         }
       }
 
-      const baseName = downloadPngBlob(blob, name);
+      const baseName = downloadJpgBlob(blob, name);
       pendingPngBlob = null;
       syncHistoryAfterPngSave(baseName);
       saveDialog.close();
@@ -3669,6 +4415,13 @@
       if (wrapEl) {
         const id = wrapEl.dataset.id;
 
+        if (wrapEl.classList.contains('is-editing')) {
+          if (!e.target.closest('.floating-label-input')) {
+            wrapEl.querySelector('.floating-label-input')?.focus();
+          }
+          return;
+        }
+
         if (e.target.closest('.floating-label-input')) {
           selectFloatingLabel(id);
           return;
@@ -3686,6 +4439,18 @@
           return;
         }
 
+        if (e.altKey) {
+          selectFloatingLabel(id);
+          startFloatingLabelDrag(e, wrapEl);
+          return;
+        }
+
+        const label = getFloatingLabelById(id);
+        if (label && SLASH_LABEL_TEXTS.has(label.text)) {
+          startFloatingLabelDrag(e, wrapEl);
+          return;
+        }
+
         if (state.activeTool === 'eraser' || isEraserPointer(e)) {
           eraseFloatingLabel(id);
           return;
@@ -3693,6 +4458,15 @@
 
         selectFloatingLabel(id);
         startFloatingLabelDrag(e, wrapEl);
+        return;
+      }
+
+      if (e.altKey) {
+        const cell = e.target.closest('.day-cell');
+        if (cell) {
+          e.preventDefault();
+          startMarkMoveDrag(cell.dataset.date, e);
+        }
         return;
       }
 
@@ -3709,7 +4483,7 @@
         const cell = e.target.closest('.day-cell');
         if (cell) {
           e.preventDefault();
-          startMarkMoveDrag(cell.dataset.date);
+          startMarkMoveDrag(cell.dataset.date, e);
         }
         return;
       }
@@ -3751,6 +4525,9 @@
     initMonthSelect();
     loadSavesMeta();
     loadSession();
+    syncDocumentTitleFromActiveSave();
+    syncDocumentTitleInput();
+    updatePageTitle();
     state.labelStyle = clampLabelStyle(state.labelStyle);
     syncLabelStyleInputs();
     applyLabelStyleToDom();
