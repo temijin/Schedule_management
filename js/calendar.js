@@ -332,13 +332,18 @@
     return getCalendarScale() * getCalendarDisplayScale();
   }
 
+  function getToolSlashLinePx() {
+    const rootStyle = getComputedStyle(document.documentElement);
+    return parsePx(rootStyle.getPropertyValue('--tool-slash-line'), 2);
+  }
+
   function scaledToolMarkFallbacks() {
     const scale = getCalendarUiScale();
     return {
       boxSize: 40 * scale,
       boxBorder: 1,
       boxRadius: 0,
-      slashLine: 2,
+      slashLine: getToolSlashLinePx(),
       outlineBorder: 1,
     };
   }
@@ -354,7 +359,7 @@
           boxSize: layoutWidth,
           boxBorder: fallback.boxBorder,
           boxRadius: parsePx(cs.borderTopLeftRadius, fallback.boxRadius),
-          slashLine: fallback.slashLine,
+          slashLine: getToolSlashLinePx(),
           outlineBorder: fallback.outlineBorder,
         };
       }
@@ -797,16 +802,19 @@
     return 'plain';
   }
 
-  function getWeekCountForPanelKey(key) {
-    const [year, month] = key.split('-').map(Number);
-    let hasNextPanel = false;
+  function getHasNextPanelForPanelKey(panelKeyStr) {
     for (let i = 0; i < state.visibleMonthCount; i++) {
-      const vm = addMonths(state.viewYear, state.viewMonth, i);
-      if (panelKey(vm.year, vm.month) === key) {
-        hasNextPanel = i < state.visibleMonthCount - 1;
-        break;
+      const { year, month } = addMonths(state.viewYear, state.viewMonth, i);
+      if (panelKey(year, month) === panelKeyStr) {
+        return i < state.visibleMonthCount - 1;
       }
     }
+    return false;
+  }
+
+  function getWeekCountForPanelKey(key) {
+    const [year, month] = key.split('-').map(Number);
+    const hasNextPanel = getHasNextPanelForPanelKey(key);
     let cells = buildMonthCells(year, month);
     cells = trimTrailingWeekWhenNextPanelVisible(cells, hasNextPanel);
     return cells.length / 7;
@@ -859,32 +867,45 @@
     const y = Number(label.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
 
-    for (const hasNextPanel of [false, true]) {
-      let cells = buildMonthCells(panelYear, panelMonth);
-      cells = trimTrailingWeekWhenNextPanelVisible(cells, hasNextPanel);
-      const weekCount = cells.length / 7;
+    const hasNextPanel = getHasNextPanelForPanelKey(label.panel);
+    let cells = buildMonthCells(panelYear, panelMonth);
+    cells = trimTrailingWeekWhenNextPanelVisible(cells, hasNextPanel);
+    const weekCount = cells.length / 7;
 
-      for (let idx = 0; idx < cells.length; idx++) {
-        const row = Math.floor(idx / 7);
-        const col = idx % 7;
-        const bounds = getDateCellAreaBounds(
-          panelYear,
-          panelMonth,
+    for (let idx = 0; idx < cells.length; idx++) {
+      const row = Math.floor(idx / 7);
+      const col = idx % 7;
+      const bounds = getDateCellAreaBounds(
+        panelYear,
+        panelMonth,
+        hasNextPanel,
+        row,
+        col,
+        weekCount
+      );
+      if (x >= bounds.x0 && x <= bounds.x1 && y >= bounds.y0 && y <= bounds.y1) {
+        const cell = cells[idx];
+        return {
+          dateKey: dateKey(cell.year, cell.month, cell.day),
           hasNextPanel,
-          row,
-          col,
-          weekCount
-        );
-        if (x >= bounds.x0 && x <= bounds.x1 && y >= bounds.y0 && y <= bounds.y1) {
-          const cell = cells[idx];
-          return {
-            dateKey: dateKey(cell.year, cell.month, cell.day),
-            hasNextPanel,
-          };
-        }
+        };
       }
     }
     return null;
+  }
+
+  function anchorFloatingLabelToDate(label, dateKeyStr, panelYear, panelMonth) {
+    if (!label || !dateKeyStr) return;
+    const hasNextPanel = getHasNextPanelForPanelKey(panelKey(panelYear, panelMonth));
+    const center = getDateAreaCenter(dateKeyStr, panelYear, panelMonth, hasNextPanel);
+    label.anchorDate = dateKeyStr;
+    if (center) {
+      label.anchorOffsetX = label.x - center.x;
+      label.anchorOffsetY = label.y - center.y;
+    } else {
+      delete label.anchorOffsetX;
+      delete label.anchorOffsetY;
+    }
   }
 
   function captureFloatingLabelAnchor(label) {
@@ -989,6 +1010,10 @@
 
   function getDateKeyForSlashLabel(label) {
     if (!label || !SLASH_LABEL_TEXTS.has(label.text)) return null;
+    if (label.slashDateKey && state.slashes[label.slashDateKey]) {
+      const mode = normalizeSlashMode(state.slashes[label.slashDateKey].mode);
+      if (SLASH_MODE_LABELS[mode] === label.text) return label.slashDateKey;
+    }
     return Object.keys(state.slashes).find((key) => isSlashLabelAtDate(label, key)) || null;
   }
 
@@ -1021,6 +1046,7 @@
     if (existing) {
       existing.size = SLASH_LABEL_FONT_SIZE;
       existing.color = '#111';
+      existing.slashDateKey = dateKey;
       return;
     }
 
@@ -1033,6 +1059,7 @@
       color: '#111',
       size: SLASH_LABEL_FONT_SIZE,
       align: DEFAULT_LABEL_STYLE.align,
+      slashDateKey: dateKey,
     });
   }
 
@@ -1638,7 +1665,7 @@
     let weekdaysGap = 19.5 * displayScale;
     let textSize = 17 * displayScale;
     let colGap = 0;
-    let panelMargin = 12 * scale;
+    let panelMargin = 4 * scale;
 
     const panel = stackEl?.querySelector('.month-panel');
     const card = panel?.querySelector('.month-card');
@@ -1682,9 +1709,15 @@
       const firstCard = panels[0]?.querySelector('.month-card');
       const secondCard = panels[1]?.querySelector('.month-card');
       if (firstCard && secondCard) {
-        const gap = secondCard.offsetTop - (firstCard.offsetTop + firstCard.offsetHeight);
+        const firstRect = firstCard.getBoundingClientRect();
+        const secondRect = secondCard.getBoundingClientRect();
+        const gap = secondRect.top - firstRect.bottom;
         if (gap > 0) panelMargin = gap;
+      } else if (panels[0]) {
+        panelMargin = parsePx(getComputedStyle(panels[0]).marginBottom, panelMargin);
       }
+    } else if (panel) {
+      panelMargin = parsePx(getComputedStyle(panel).marginBottom, panelMargin);
     }
 
     return {
@@ -3384,7 +3417,12 @@
       size: state.labelStyle.size,
       align: state.labelStyle.align,
     };
-    captureFloatingLabelAnchor(label);
+    const cell = e.target.closest('.day-cell');
+    if (cell?.dataset.date) {
+      anchorFloatingLabelToDate(label, cell.dataset.date, year, month);
+    } else {
+      captureFloatingLabelAnchor(label);
+    }
     state.floatingLabels.push(label);
     selectedFloatingLabelId = id;
     editingFloatingLabelId = id;
@@ -3414,7 +3452,7 @@
     if (!label) return;
     let undoRecorded = false;
 
-    if (e.altKey && SLASH_LABEL_TEXTS.has(label.text)) {
+    if (SLASH_LABEL_TEXTS.has(label.text)) {
       const sourceKey = getDateKeyForSlashLabel(label);
       if (sourceKey) {
         clearFloatingLabelSelection();
@@ -3466,7 +3504,7 @@
     e.stopPropagation();
     const id = wrapEl.dataset.id;
     const label = getFloatingLabelById(id);
-    if (!label) return;
+    if (!label || SLASH_LABEL_TEXTS.has(label.text)) return;
 
     recordUndoBeforeChange();
     selectFloatingLabel(id);
@@ -3481,7 +3519,7 @@
   function onFloatingLabelMove(e) {
     if (!floatingLabelDrag) return;
     const label = getFloatingLabelById(floatingLabelDrag.id);
-    if (!label) return;
+    if (!label || SLASH_LABEL_TEXTS.has(label.text)) return;
 
     const pixelDx = e.clientX - floatingLabelDrag.startX;
     const pixelDy = e.clientY - floatingLabelDrag.startY;
@@ -4447,7 +4485,20 @@
 
         const label = getFloatingLabelById(id);
         if (label && SLASH_LABEL_TEXTS.has(label.text)) {
-          startFloatingLabelDrag(e, wrapEl);
+          e.preventDefault();
+          e.stopPropagation();
+          const sourceKey = getDateKeyForSlashLabel(label);
+          if (!sourceKey) return;
+
+          if (state.activeTool === 'eraser' || isEraserPointer(e)) {
+            recordUndoBeforeChange();
+            eraseSelection([sourceKey]);
+            saveSession();
+            render();
+            return;
+          }
+
+          startMarkMoveDrag(sourceKey, e);
           return;
         }
 

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>스케줄표 만들기 도구</title>
-  <link rel="stylesheet" href="css/calendar.css?v=106">
+  <link rel="stylesheet" href="css/calendar.css?v=119">
 </head>
 <body>
   <div class="app-layout">
@@ -12,14 +12,10 @@
       <div class="app-title-bar">
         <div class="header-nav-actions">
           <button type="button" class="header-btn header-btn-nav" id="btn-undo" aria-label="실행 취소 (Ctrl+Z)" title="실행 취소 (Ctrl+Z)" disabled>
-            <svg class="header-nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" d="M19 12H5M12 19l-7-7 7-7"/>
-            </svg>
+            <span class="header-nav-icon header-nav-icon-undo" aria-hidden="true"></span>
           </button>
           <button type="button" class="header-btn header-btn-nav" id="btn-redo" aria-label="다시 실행 (Ctrl+Shift+Z)" title="다시 실행 (Ctrl+Shift+Z)" disabled>
-            <svg class="header-nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M12 5l7 7-7 7"/>
-            </svg>
+            <span class="header-nav-icon header-nav-icon-undo header-nav-icon-redo" aria-hidden="true"></span>
           </button>
         </div>
         <input type="text" id="input-document-title" class="app-title-input" placeholder="제목을 입력해주세요." aria-label="파일 제목" maxlength="120" autocomplete="off">
@@ -256,6 +252,6 @@
     </div>
   </dialog>
 
-  <script src="js/calendar.js?v=73"></script>
+  <script src="js/calendar.js?v=80"></script>
 </body>
 </html>
