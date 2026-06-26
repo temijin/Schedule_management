@@ -6,7 +6,7 @@
   const STORAGE_KEY_LEGACY = 'calendar-markings-v2';
   const STORAGE_KEY_V1 = 'calendar-markings-v1';
   const DEFAULT_MAX_SAVES = 100;
-  const UPDATE_NEWS_VERSION = '7';
+  const UPDATE_NEWS_VERSION = '8';
   const UPDATE_NEWS_DISMISS_KEY = 'calendar-update-news-dismissed';
   const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
   const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
@@ -105,7 +105,8 @@
   let selectionUsesEraser = false;
   let floatingLabelDrag = null;
   let floatingLabelResize = null;
-  let selectedFloatingLabelId = null;
+  let selectedFloatingLabelIds = new Set();
+  let primaryFloatingLabelId = null;
   let editingFloatingLabelId = null;
   let copiedFloatingLabel = null;
   let pasteRepeatCount = 0;
@@ -2985,7 +2986,7 @@
     if (isSlashLabel) {
       wrap.classList.add('is-slash-label');
     } else {
-      if (label.id === selectedFloatingLabelId || isEditing) {
+      if (selectedFloatingLabelIds.has(label.id) || isEditing) {
         wrap.classList.add('is-selected');
       }
       if (isEditing) {
@@ -3025,19 +3026,47 @@
 
   function syncFloatingLabelSelection() {
     stackEl.querySelectorAll('.floating-label-wrap').forEach((el) => {
-      el.classList.toggle('is-selected', el.dataset.id === selectedFloatingLabelId);
+      el.classList.toggle('is-selected', selectedFloatingLabelIds.has(el.dataset.id));
     });
   }
 
+  function isFloatingLabelSelected(id) {
+    return selectedFloatingLabelIds.has(id);
+  }
+
   function selectFloatingLabel(id) {
-    selectedFloatingLabelId = id;
+    selectedFloatingLabelIds.clear();
+    selectedFloatingLabelIds.add(id);
+    primaryFloatingLabelId = id;
+    syncFloatingLabelSelection();
+  }
+
+  function toggleFloatingLabelInSelection(id) {
+    if (selectedFloatingLabelIds.has(id)) {
+      selectedFloatingLabelIds.delete(id);
+      if (primaryFloatingLabelId === id) {
+        primaryFloatingLabelId = selectedFloatingLabelIds.size
+          ? [...selectedFloatingLabelIds].at(-1)
+          : null;
+      }
+    } else {
+      selectedFloatingLabelIds.add(id);
+      primaryFloatingLabelId = id;
+    }
     syncFloatingLabelSelection();
   }
 
   function clearFloatingLabelSelection() {
-    if (!selectedFloatingLabelId) return;
-    selectedFloatingLabelId = null;
+    if (selectedFloatingLabelIds.size === 0) return;
+    selectedFloatingLabelIds.clear();
+    primaryFloatingLabelId = null;
     syncFloatingLabelSelection();
+  }
+
+  function focusFloatingLabelInSelection(id) {
+    if (!selectedFloatingLabelIds.has(id)) return false;
+    primaryFloatingLabelId = id;
+    return true;
   }
 
   function getFloatingLabelWrapAtPoint(clientX, clientY) {
@@ -3109,8 +3138,8 @@
   }
 
   function copySelectedFloatingLabel() {
-    if (!selectedFloatingLabelId || isFloatingLabelEditing()) return false;
-    const label = getFloatingLabelById(selectedFloatingLabelId);
+    if (!primaryFloatingLabelId || isFloatingLabelEditing()) return false;
+    const label = getFloatingLabelById(primaryFloatingLabelId);
     if (!label || !label.text.trim()) return false;
 
     copiedFloatingLabel = {
@@ -3123,7 +3152,7 @@
       y: label.y,
     };
     pasteRepeatCount = 0;
-    showCopyFeedback(selectedFloatingLabelId);
+    showCopyFeedback(primaryFloatingLabelId);
     return true;
   }
 
@@ -3144,7 +3173,7 @@
       align: copiedFloatingLabel.align,
     });
     pasteRepeatCount += 1;
-    selectedFloatingLabelId = id;
+    selectFloatingLabel(id);
     saveSession();
     render();
     return true;
@@ -3522,15 +3551,69 @@
     return true;
   }
 
+  function getConstrainedGroupPixelDelta(pixelDx, pixelDy, drag, e) {
+    const monthGrid = getMonthGridAtPoint(e.clientX, e.clientY);
+    const key = monthGrid ? getPanelKeyFromMonthGrid(monthGrid) : drag.startPanel;
+    if (!e.shiftKey || key !== drag.startPanel) {
+      return { pixelDx, pixelDy };
+    }
+
+    const horizontal = Math.abs(pixelDx) >= Math.abs(pixelDy);
+    if (horizontal) {
+      return { pixelDx, pixelDy: 0 };
+    }
+
+    return { pixelDx: 0, pixelDy };
+  }
+
+  function buildFloatingLabelDragGroupStarts(dragId) {
+    const ids = selectedFloatingLabelIds.has(dragId)
+      ? [...selectedFloatingLabelIds].filter((id) => {
+          const label = getFloatingLabelById(id);
+          return label && !SLASH_LABEL_TEXTS.has(label.text);
+        })
+      : [dragId];
+
+    return ids
+      .map((id) => {
+        const label = getFloatingLabelById(id);
+        if (!label) return null;
+        return { id, x: label.x, y: label.y, panel: label.panel };
+      })
+      .filter(Boolean);
+  }
+
+  function moveFloatingLabelGroupByPixelDelta(drag, pixelDx, pixelDy, e) {
+    if (!drag.groupStarts || drag.groupStarts.length <= 1) return;
+
+    const { pixelDx: cdx, pixelDy: cdy } = getConstrainedGroupPixelDelta(
+      pixelDx,
+      pixelDy,
+      drag,
+      e
+    );
+
+    drag.groupStarts.forEach((start) => {
+      if (start.id === drag.id) return;
+      const label = getFloatingLabelById(start.id);
+      if (!label || SLASH_LABEL_TEXTS.has(label.text)) return;
+
+      const monthGrid = getMonthGridForPanelKey(start.panel);
+      const rect = monthGrid?.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+
+      label.x = clamp01(start.x + cdx / rect.width);
+      label.y = clamp01(start.y + cdy / rect.height);
+      updateFloatingLabelElement(label);
+    });
+  }
+
   function moveSelectedFloatingLabelByArrow(e) {
     const arrowKeys = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
     if (!arrowKeys.has(e.key)) return false;
     if (shouldIgnoreUndoShortcut(e)) return false;
     if (isFloatingLabelEditing()) return false;
-    if (!selectedFloatingLabelId) return false;
-
-    const label = getFloatingLabelById(selectedFloatingLabelId);
-    if (!label) return false;
+    if (selectedFloatingLabelIds.size === 0) return false;
 
     const step = e.shiftKey ? 10 : 1;
     let dx = 0;
@@ -3552,9 +3635,20 @@
         break;
     }
 
+    const labels = [...selectedFloatingLabelIds]
+      .map((id) => getFloatingLabelById(id))
+      .filter((label) => label && !SLASH_LABEL_TEXTS.has(label.text));
+    if (labels.length === 0) return false;
+
     recordUndoBeforeChange();
-    if (!nudgeFloatingLabel(label, dx, dy)) return false;
-    captureFloatingLabelAnchor(label);
+    let moved = false;
+    labels.forEach((label) => {
+      if (nudgeFloatingLabel(label, dx, dy)) {
+        captureFloatingLabelAnchor(label);
+        moved = true;
+      }
+    });
+    if (!moved) return false;
     saveSession();
     e.preventDefault();
     return true;
@@ -3567,12 +3661,31 @@
     if (saveDialog?.open || unsavedDialog?.open || deleteDialog?.open || updateNewsDialog?.open) {
       return false;
     }
-    if (!selectedFloatingLabelId) return false;
+    if (selectedFloatingLabelIds.size === 0) return false;
 
-    const label = getFloatingLabelById(selectedFloatingLabelId);
-    if (!label || SLASH_LABEL_TEXTS.has(label.text)) return false;
+    const ids = [...selectedFloatingLabelIds].filter((id) => {
+      const label = getFloatingLabelById(id);
+      return label && !SLASH_LABEL_TEXTS.has(label.text);
+    });
+    if (ids.length === 0) return false;
 
-    eraseFloatingLabel(selectedFloatingLabelId);
+    recordUndoBeforeChange();
+    ids.forEach((id) => {
+      selectedFloatingLabelIds.delete(id);
+      if (primaryFloatingLabelId === id) {
+        primaryFloatingLabelId = null;
+      }
+      if (editingFloatingLabelId === id) {
+        editingFloatingLabelId = null;
+      }
+    });
+    const idSet = new Set(ids);
+    state.floatingLabels = state.floatingLabels.filter((l) => !idSet.has(l.id));
+    if (selectedFloatingLabelIds.size && !primaryFloatingLabelId) {
+      primaryFloatingLabelId = [...selectedFloatingLabelIds].at(-1);
+    }
+    saveSession();
+    render();
     e.preventDefault();
     return true;
   }
@@ -3606,7 +3719,7 @@
       captureFreeFloatingPanelAnchor(label);
     }
     state.floatingLabels.push(label);
-    selectedFloatingLabelId = id;
+    selectFloatingLabel(id);
     editingFloatingLabelId = id;
     saveSession();
     render();
@@ -3614,8 +3727,11 @@
 
   function eraseFloatingLabel(id) {
     recordUndoBeforeChange();
-    if (selectedFloatingLabelId === id) {
-      selectedFloatingLabelId = null;
+    selectedFloatingLabelIds.delete(id);
+    if (primaryFloatingLabelId === id) {
+      primaryFloatingLabelId = selectedFloatingLabelIds.size
+        ? [...selectedFloatingLabelIds].at(-1)
+        : null;
     }
     if (editingFloatingLabelId === id) {
       editingFloatingLabelId = null;
@@ -3663,7 +3779,7 @@
         anchorOffsetY: label.anchorOffsetY,
       };
       state.floatingLabels.push(label);
-      selectedFloatingLabelId = id;
+      selectFloatingLabel(id);
       render();
     }
 
@@ -3680,6 +3796,7 @@
       moved: false,
       onText: Boolean(e.target.closest('.floating-label-text')),
       eraserIntent: isEraserPointer(e) || state.activeTool === 'eraser',
+      groupStarts: buildFloatingLabelDragGroupStarts(id),
     };
   }
 
@@ -3720,6 +3837,7 @@
 
     if (moved) {
       updateFloatingLabelElement(label);
+      moveFloatingLabelGroupByPixelDelta(floatingLabelDrag, pixelDx, pixelDy, e);
     }
   }
 
@@ -3748,15 +3866,20 @@
 
     if (drag.copyMode && !drag.moved) {
       state.floatingLabels = state.floatingLabels.filter((label) => label.id !== drag.id);
-      selectedFloatingLabelId = drag.sourceId;
+      selectFloatingLabel(drag.sourceId);
       if (drag.undoRecorded) undoStack.pop();
       render();
       return;
     }
 
     if (drag.moved) {
-      const label = getFloatingLabelById(drag.id);
-      if (label) captureFloatingLabelAnchor(label);
+      const movedIds = drag.groupStarts?.length
+        ? drag.groupStarts.map((start) => start.id)
+        : [drag.id];
+      movedIds.forEach((id) => {
+        const label = getFloatingLabelById(id);
+        if (label) captureFloatingLabelAnchor(label);
+      });
       saveSession();
       return;
     }
@@ -3770,8 +3893,6 @@
     ) {
       return;
     }
-
-    clearFloatingLabelSelection();
   }
 
   function endFloatingLabelResize() {
@@ -3780,26 +3901,41 @@
     saveSession();
   }
 
-  function createMonthPanelRemoveButton() {
+  function removeVisibleMonthPanel(panelIndex) {
+    if (state.visibleMonthCount <= 1) return;
+    recordUndoBeforeChange();
+
+    if (panelIndex === 0) {
+      const next = addMonths(state.viewYear, state.viewMonth, 1);
+      state.viewYear = next.year;
+      state.viewMonth = next.month;
+      state.visibleMonthCount--;
+      activePanelKey = panelKey(state.viewYear, state.viewMonth);
+    } else {
+      state.visibleMonthCount--;
+    }
+
+    clearFloatingLabelSelection();
+    render();
+    saveSession();
+  }
+
+  function createMonthPanelRemoveButton(panelIndex, { isFirstPanel = false } = {}) {
+    const label = isFirstPanel ? '이 달 제거' : '마지막 달 제거';
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'month-panel-remove-btn';
     btn.textContent = '×';
-    btn.title = '마지막 달 제거';
-    btn.setAttribute('aria-label', '마지막 달 제거');
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (state.visibleMonthCount > 1) {
-        recordUndoBeforeChange();
-        state.visibleMonthCount--;
-        render();
-        saveSession();
-      }
+      removeVisibleMonthPanel(panelIndex);
     });
     return btn;
   }
 
-  function renderMonthPanel(year, month, hasNextPanel, { showRemoveBtn = false } = {}) {
+  function renderMonthPanel(year, month, hasNextPanel, { showRemoveBtn = false, panelIndex = 0 } = {}) {
     const panel = document.createElement('section');
     panel.className = 'month-panel';
     panel.dataset.year = year;
@@ -3869,7 +4005,9 @@
     panel.appendChild(card);
     if (showRemoveBtn) {
       panel.classList.add('month-panel--has-remove');
-      panel.appendChild(createMonthPanelRemoveButton());
+      panel.appendChild(
+        createMonthPanelRemoveButton(panelIndex, { isFirstPanel: panelIndex === 0 })
+      );
     }
     return panel;
   }
@@ -3975,8 +4113,12 @@
     for (let i = 0; i < state.visibleMonthCount; i++) {
       const { year, month } = addMonths(state.viewYear, state.viewMonth, i);
       const hasNextPanel = i < state.visibleMonthCount - 1;
-      const showRemoveBtn = state.visibleMonthCount > 1 && i === state.visibleMonthCount - 1;
-      stackEl.appendChild(renderMonthPanel(year, month, hasNextPanel, { showRemoveBtn }));
+      const showRemoveBtn =
+        state.visibleMonthCount > 1 &&
+        (i === 0 || i === state.visibleMonthCount - 1);
+      stackEl.appendChild(
+        renderMonthPanel(year, month, hasNextPanel, { showRemoveBtn, panelIndex: i })
+      );
     }
 
     syncFloatingLabelWrapPositionsFromState();
@@ -4013,7 +4155,7 @@
   }
 
   function getDisplayedLabelColor() {
-    const id = selectedFloatingLabelId || editingFloatingLabelId;
+    const id = primaryFloatingLabelId || editingFloatingLabelId;
     if (id) {
       const label = getFloatingLabelById(id);
       if (label && !SLASH_LABEL_TEXTS.has(label.text)) {
@@ -4024,7 +4166,7 @@
   }
 
   function getDisplayedLabelAlign() {
-    const id = selectedFloatingLabelId || editingFloatingLabelId;
+    const id = primaryFloatingLabelId || editingFloatingLabelId;
     if (id) {
       const label = getFloatingLabelById(id);
       if (label && !SLASH_LABEL_TEXTS.has(label.text)) {
@@ -4040,7 +4182,7 @@
     );
     state.labelStyle.color = normalized;
 
-    const targetId = selectedFloatingLabelId || editingFloatingLabelId;
+    const targetId = primaryFloatingLabelId || editingFloatingLabelId;
     if (targetId) {
       const label = getFloatingLabelById(targetId);
       if (label && !SLASH_LABEL_TEXTS.has(label.text)) {
@@ -4061,7 +4203,7 @@
     const normalized = normalizeLabelAlign(align);
     state.labelStyle.align = normalized;
 
-    const targetId = selectedFloatingLabelId || editingFloatingLabelId;
+    const targetId = primaryFloatingLabelId || editingFloatingLabelId;
     if (targetId) {
       const label = getFloatingLabelById(targetId);
       if (label && !SLASH_LABEL_TEXTS.has(label.text)) {
@@ -4170,7 +4312,7 @@
       size: state.labelStyle.size,
       align: state.labelStyle.align,
     });
-    selectedFloatingLabelId = id;
+    selectFloatingLabel(id);
     editingFloatingLabelId = null;
     saveSession();
     render();
@@ -4417,6 +4559,15 @@
     if (btnRedo) btnRedo.addEventListener('click', redo);
 
     document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
+        if (inputHistorySearch) {
+          e.preventDefault();
+          inputHistorySearch.focus();
+          inputHistorySearch.select();
+        }
+        return;
+      }
+
       if (moveSelectedFloatingLabelByArrow(e)) return;
       if (deleteSelectedFloatingLabelByKey(e)) return;
 
@@ -4695,6 +4846,20 @@
 
         if (state.activeTool === 'eraser' || isEraserPointer(e)) {
           eraseFloatingLabel(id);
+          return;
+        }
+
+        if (e.shiftKey) {
+          toggleFloatingLabelInSelection(id);
+          if (selectedFloatingLabelIds.has(id)) {
+            startFloatingLabelDrag(e, wrapEl);
+          }
+          return;
+        }
+
+        if (selectedFloatingLabelIds.has(id)) {
+          focusFloatingLabelInSelection(id);
+          startFloatingLabelDrag(e, wrapEl);
           return;
         }
 
