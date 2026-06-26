@@ -6,7 +6,7 @@
   const STORAGE_KEY_LEGACY = 'calendar-markings-v2';
   const STORAGE_KEY_V1 = 'calendar-markings-v1';
   const DEFAULT_MAX_SAVES = 100;
-  const UPDATE_NEWS_VERSION = '8';
+  const UPDATE_NEWS_VERSION = '9';
   const UPDATE_NEWS_DISMISS_KEY = 'calendar-update-news-dismissed';
   const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
   const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
@@ -3028,6 +3028,7 @@
     stackEl.querySelectorAll('.floating-label-wrap').forEach((el) => {
       el.classList.toggle('is-selected', selectedFloatingLabelIds.has(el.dataset.id));
     });
+    syncLabelGroupAlignButtons();
   }
 
   function isFloatingLabelSelected(id) {
@@ -3083,7 +3084,7 @@
 
   function handleFloatingLabelOutsidePointer(e) {
     if (e.target.closest('.text-tool-body')) {
-      if (e.target.closest('.swatch[data-color], .label-align-btn[data-label-align]')) {
+      if (e.target.closest('.swatch[data-color], .label-align-btn[data-label-align], .label-align-btn[data-label-group-align]')) {
         e.preventDefault();
       }
       return;
@@ -3583,18 +3584,10 @@
       .filter(Boolean);
   }
 
-  function moveFloatingLabelGroupByPixelDelta(drag, pixelDx, pixelDy, e) {
-    if (!drag.groupStarts || drag.groupStarts.length <= 1) return;
-
-    const { pixelDx: cdx, pixelDy: cdy } = getConstrainedGroupPixelDelta(
-      pixelDx,
-      pixelDy,
-      drag,
-      e
-    );
+  function moveFloatingLabelGroupFromPixelDelta(drag, pixelDx, pixelDy) {
+    if (!drag.groupStarts?.length) return;
 
     drag.groupStarts.forEach((start) => {
-      if (start.id === drag.id) return;
       const label = getFloatingLabelById(start.id);
       if (!label || SLASH_LABEL_TEXTS.has(label.text)) return;
 
@@ -3602,8 +3595,9 @@
       const rect = monthGrid?.getBoundingClientRect();
       if (!rect || rect.width <= 0 || rect.height <= 0) return;
 
-      label.x = clamp01(start.x + cdx / rect.width);
-      label.y = clamp01(start.y + cdy / rect.height);
+      label.x = clamp01(start.x + pixelDx / rect.width);
+      label.y = clamp01(start.y + pixelDy / rect.height);
+      ensureFloatingLabelInCorrectLayer(label);
       updateFloatingLabelElement(label);
     });
   }
@@ -3833,11 +3827,22 @@
       }
     }
 
+    if (floatingLabelDrag.groupStarts?.length > 1) {
+      const { pixelDx: cdx, pixelDy: cdy } = getConstrainedGroupPixelDelta(
+        pixelDx,
+        pixelDy,
+        floatingLabelDrag,
+        e
+      );
+      moveFloatingLabelGroupFromPixelDelta(floatingLabelDrag, cdx, cdy);
+      clearFloatingLabelSnapGuides();
+      return;
+    }
+
     const moved = setFloatingLabelPositionFromPointWithSnap(label, e, floatingLabelDrag);
 
     if (moved) {
       updateFloatingLabelElement(label);
-      moveFloatingLabelGroupByPixelDelta(floatingLabelDrag, pixelDx, pixelDy, e);
     }
   }
 
@@ -4220,6 +4225,83 @@
     updateToolbar();
   }
 
+  function getSelectedEditableFloatingLabels() {
+    return [...selectedFloatingLabelIds]
+      .map((id) => getFloatingLabelById(id))
+      .filter((label) => label && !SLASH_LABEL_TEXTS.has(label.text));
+  }
+
+  function setFloatingLabelClientPoint(label, clientX, clientY) {
+    const monthGrid = getMonthGridForPanelKey(label.panel);
+    const rect = monthGrid?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+
+    label.x = clamp01((clientX - rect.left) / rect.width);
+    label.y = clamp01((clientY - rect.top) / rect.height);
+    ensureFloatingLabelInCorrectLayer(label);
+    updateFloatingLabelElement(label);
+    return true;
+  }
+
+  function alignSelectedFloatingLabelsVerticalCenter() {
+    const labels = getSelectedEditableFloatingLabels();
+    if (labels.length < 2) return false;
+
+    const entries = labels
+      .map((label) => ({ label, point: labelCoordsToClientPoint(label) }))
+      .filter((entry) => entry.point);
+    if (entries.length < 2) return false;
+
+    const ys = entries.map((entry) => entry.point.y);
+    const targetY = (Math.min(...ys) + Math.max(...ys)) / 2;
+
+    recordUndoBeforeChange();
+    entries.forEach(({ label, point }) => {
+      setFloatingLabelClientPoint(label, point.x, targetY);
+      captureFloatingLabelAnchor(label);
+    });
+    saveSession();
+    return true;
+  }
+
+  function alignSelectedFloatingLabelsHorizontalCenter() {
+    const labels = getSelectedEditableFloatingLabels();
+    if (labels.length < 2) return false;
+
+    const entries = labels
+      .map((label) => ({ label, point: labelCoordsToClientPoint(label) }))
+      .filter((entry) => entry.point);
+    if (entries.length < 2) return false;
+
+    const xs = entries.map((entry) => entry.point.x);
+    const targetX = (Math.min(...xs) + Math.max(...xs)) / 2;
+
+    recordUndoBeforeChange();
+    entries.forEach(({ label, point }) => {
+      setFloatingLabelClientPoint(label, targetX, point.y);
+      captureFloatingLabelAnchor(label);
+    });
+    saveSession();
+    return true;
+  }
+
+  function syncLabelGroupAlignButtons() {
+    const enabled = getSelectedEditableFloatingLabels().length >= 2;
+    document.querySelectorAll('.label-align-btn[data-label-group-align]').forEach((btn) => {
+      btn.disabled = !enabled;
+    });
+  }
+
+  function applyLabelGroupAlign(mode) {
+    if (mode === 'vertical-center') {
+      return alignSelectedFloatingLabelsVerticalCenter();
+    }
+    if (mode === 'horizontal-center') {
+      return alignSelectedFloatingLabelsHorizontalCenter();
+    }
+    return false;
+  }
+
   function getPrimaryPanelKey() {
     return panelKey(state.viewYear, state.viewMonth);
   }
@@ -4368,6 +4450,17 @@
     if (root.dataset.bound === '1') return;
     root.dataset.bound = '1';
     root.addEventListener('mousedown', (e) => {
+      const groupBtn = e.target.closest('.label-align-btn[data-label-group-align]');
+      if (groupBtn) {
+        if (groupBtn.disabled) return;
+        e.preventDefault();
+        state.activeTool = 'label';
+        hideColorBoxPreview();
+        applyLabelGroupAlign(groupBtn.dataset.labelGroupAlign);
+        syncCalendarToolCursor();
+        return;
+      }
+
       const btn = e.target.closest('.label-align-btn[data-label-align]');
       if (!btn) return;
       e.preventDefault();
@@ -4392,6 +4485,9 @@
     if (tool === 'label' && btn.dataset.labelAlign) {
       return state.activeTool === 'label' && btn.dataset.labelAlign === getDisplayedLabelAlign();
     }
+    if (tool === 'label' && btn.dataset.labelGroupAlign) {
+      return false;
+    }
     if (tool === 'label' && btn.dataset.labelTemplate) {
       return false;
     }
@@ -4402,6 +4498,8 @@
     document.querySelectorAll('.tool-icon-btn, .swatch[data-tool], .label-template-btn, .label-align-btn').forEach((btn) => {
       btn.classList.toggle('active', isToolControlActive(btn));
     });
+
+    syncLabelGroupAlignButtons();
 
     if (toolHintEl) {
       toolHintEl.textContent = TOOL_HINTS[state.activeTool] || '';

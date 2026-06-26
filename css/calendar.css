@@ -1093,6 +1093,11 @@ html {
   box-shadow: inset 0 0 0 1px #111;
 }
 
+.label-align-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 .align-icon {
   display: flex;
   flex-direction: column;
@@ -1133,6 +1138,21 @@ html {
 
 .align-icon-right span {
   align-self: flex-end;
+}
+
+.label-group-align-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  background: center / contain no-repeat;
+}
+
+.label-group-align-icon--vertical-center {
+  background-image: url("align-vertical-center.png");
+}
+
+.label-group-align-icon--horizontal-center {
+  background-image: url("horizontal-center.png");
 }
 
 .label-color-swatches .swatch {
