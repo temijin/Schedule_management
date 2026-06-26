@@ -6,7 +6,7 @@
   const STORAGE_KEY_LEGACY = 'calendar-markings-v2';
   const STORAGE_KEY_V1 = 'calendar-markings-v1';
   const DEFAULT_MAX_SAVES = 100;
-  const UPDATE_NEWS_VERSION = '9';
+  const UPDATE_NEWS_VERSION = '10';
   const UPDATE_NEWS_DISMISS_KEY = 'calendar-update-news-dismissed';
   const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
   const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
