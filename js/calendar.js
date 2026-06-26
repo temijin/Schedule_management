@@ -3386,13 +3386,13 @@
     };
   }
 
-  function pointToLabelCoords(clientX, clientY, monthGrid) {
+  function pointToLabelCoords(clientX, clientY, monthGrid, { clamp = true } = {}) {
     const rect = monthGrid.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
-    return {
-      x: clamp01((clientX - rect.left) / rect.width),
-      y: clamp01((clientY - rect.top) / rect.height),
-    };
+    const x = (clientX - rect.left) / rect.width;
+    const y = (clientY - rect.top) / rect.height;
+    if (!clamp) return { x, y };
+    return { x: clamp01(x), y: clamp01(y) };
   }
 
   function labelCoordsToClientPoint(label) {
@@ -3525,6 +3525,7 @@
   function getSnappedFloatingLabelCoords(label, coords, monthGrid, options = {}) {
     const rect = monthGrid.getBoundingClientRect();
     const axes = options.axes || ['x', 'y'];
+    const clamp = options.clamp !== false;
     const snapped = { ...coords };
     const guides = [];
     const best = { x: null, y: null };
@@ -3546,11 +3547,12 @@
     ['x', 'y'].forEach((axis) => {
       const match = best[axis];
       if (!match) return;
-      snapped[axis] =
+      const raw =
         axis === 'x'
-          ? clamp01((match.clientValue - rect.left) / rect.width)
-          : clamp01((match.clientValue - rect.top) / rect.height);
-      guides.push({ axis, value: match.value, panel: match.panel });
+          ? (match.clientValue - rect.left) / rect.width
+          : (match.clientValue - rect.top) / rect.height;
+      snapped[axis] = clamp ? clamp01(raw) : raw;
+      guides.push({ axis, value: clamp ? clamp01(match.value) : match.value, panel: match.panel });
     });
 
     return { coords: snapped, guides };
@@ -3656,13 +3658,19 @@
   }
 
   function setFloatingLabelPositionFromPointWithSnap(label, e, drag) {
-    const monthGrid = getMonthGridAtPoint(e.clientX, e.clientY);
+    const deltaY = e.clientY - drag.startY;
+    const monthGrid = getGroupDragTargetGrid(
+      e.clientX,
+      e.clientY,
+      drag.startPanel,
+      deltaY
+    );
     if (!monthGrid) {
       clearFloatingLabelSnapGuides();
       return false;
     }
 
-    const coords = pointToLabelCoords(e.clientX, e.clientY, monthGrid);
+    const coords = pointToLabelCoords(e.clientX, e.clientY, monthGrid, { clamp: false });
     if (!coords) {
       clearFloatingLabelSnapGuides();
       return false;
@@ -3677,6 +3685,7 @@
     const constrained = getConstrainedFloatingLabelCoords(coords, drag, e, key);
     const snapped = getSnappedFloatingLabelCoords(label, constrained.coords, monthGrid, {
       axes: constrained.axes,
+      clamp: false,
     });
     label.panel = key;
     label.x = snapped.coords.x;
@@ -3773,29 +3782,42 @@
       );
   }
 
-  function getGroupDragTargetGrid(cursorX, cursorY, startPanelKey) {
-    const direct = getMonthGridAtPoint(cursorX, cursorY);
-    if (direct) return direct;
-
-    const grids = getMonthGridRectsForLabelX(cursorX)
-      .sort((a, b) => a.rect.top - b.rect.top)
-      .map(({ grid }) => grid);
-    if (grids.length === 0) {
-      return getMonthGridForPanelKey(startPanelKey);
+  function getGroupDragTargetGrid(cursorX, cursorY, startPanelKey, deltaY = 0) {
+    const column = getMonthGridRectsForLabelX(cursorX).sort((a, b) => a.rect.top - b.rect.top);
+    if (column.length === 0) {
+      return getMonthGridAtPoint(cursorX, cursorY) || getMonthGridForPanelKey(startPanelKey);
     }
 
-    for (let i = 0; i < grids.length - 1; i++) {
-      const upperRect = grids[i].getBoundingClientRect();
-      const lowerRect = grids[i + 1].getBoundingClientRect();
+    const direct = getMonthGridAtPoint(cursorX, cursorY);
+    if (direct) {
+      const index = column.findIndex(({ grid }) => grid === direct);
+      if (index >= 0) {
+        const { rect } = column[index];
+        const edgeThreshold = Math.max(10, rect.height * 0.03);
+        if (deltaY > 0 && index < column.length - 1) {
+          if (rect.bottom - cursorY <= edgeThreshold) {
+            return column[index + 1].grid;
+          }
+        }
+        if (deltaY < 0 && index > 0) {
+          if (cursorY - rect.top <= edgeThreshold) {
+            return column[index - 1].grid;
+          }
+        }
+      }
+      return direct;
+    }
+
+    for (let i = 0; i < column.length - 1; i++) {
+      const { rect: upperRect, grid: upperGrid } = column[i];
+      const { rect: lowerRect, grid: lowerGrid } = column[i + 1];
       if (cursorY > upperRect.bottom && cursorY < lowerRect.top) {
-        const gapMid = (upperRect.bottom + lowerRect.top) / 2;
-        return cursorY >= gapMid ? grids[i + 1] : grids[i];
+        return deltaY >= 0 ? lowerGrid : upperGrid;
       }
     }
 
-    const firstRect = grids[0].getBoundingClientRect();
-    if (cursorY < firstRect.top) return grids[0];
-    return grids[grids.length - 1];
+    if (cursorY < column[0].rect.top) return column[0].grid;
+    return column[column.length - 1].grid;
   }
 
   function finalizeFloatingLabelPositionAfterDrag(label) {
@@ -3805,7 +3827,10 @@
 
     const clientX = rect.left + label.x * rect.width;
     const clientY = rect.top + label.y * rect.height;
-    const targetGrid = getMonthGridAtPoint(clientX, clientY) || monthGrid;
+    const targetGrid =
+      getMonthGridAtPoint(clientX, clientY) ||
+      getGroupDragTargetGrid(clientX, clientY, label.panel, 0) ||
+      monthGrid;
     const targetRect = targetGrid.getBoundingClientRect();
     const targetPanel = getPanelKeyFromMonthGrid(targetGrid);
 
@@ -3873,7 +3898,12 @@
     pixelDx = constrained.pixelDx;
     pixelDy = constrained.pixelDy;
 
-    const targetGrid = getGroupDragTargetGrid(cursorX, cursorY, drag.startPanel);
+    const targetGrid = getGroupDragTargetGrid(
+      cursorX,
+      cursorY,
+      drag.startPanel,
+      pixelDy
+    );
     const rect = targetGrid?.getBoundingClientRect();
     const targetPanel = targetGrid ? getPanelKeyFromMonthGrid(targetGrid) : null;
     if (!targetGrid || !targetPanel || !rect || rect.width <= 0 || rect.height <= 0) return;
@@ -4183,9 +4213,7 @@
       movedIds.forEach((id) => {
         const label = getFloatingLabelById(id);
         if (!label) return;
-        if (drag.groupStarts?.length > 1) {
-          finalizeFloatingLabelPositionAfterDrag(label);
-        }
+        finalizeFloatingLabelPositionAfterDrag(label);
         captureFloatingLabelAnchor(label);
       });
       saveSession();
@@ -4490,20 +4518,28 @@
     );
     state.labelStyle.color = normalized;
 
-    const targetId = primaryFloatingLabelId || editingFloatingLabelId;
-    if (targetId) {
-      const label = getFloatingLabelById(targetId);
-      if (label && !SLASH_LABEL_TEXTS.has(label.text)) {
-        const currentColor = normalizeHexColor(label.color);
-        if (currentColor !== normalized) {
-          recordUndoBeforeChange();
-          label.color = normalized;
-          updateFloatingLabelElement(label);
-          saveSession();
+    let labels = getSelectedEditableFloatingLabels();
+    if (labels.length === 0) {
+      const targetId = primaryFloatingLabelId || editingFloatingLabelId;
+      if (targetId) {
+        const label = getFloatingLabelById(targetId);
+        if (label && !SLASH_LABEL_TEXTS.has(label.text)) {
+          labels = [label];
         }
       }
     }
 
+    let changed = false;
+    labels.forEach((label) => {
+      const currentColor = normalizeHexColor(label.color);
+      if (currentColor === normalized) return;
+      if (!changed) recordUndoBeforeChange();
+      changed = true;
+      label.color = normalized;
+      updateFloatingLabelElement(label);
+    });
+
+    if (changed) saveSession();
     updateToolbar();
   }
 
@@ -4753,9 +4789,9 @@
       const btn = e.target.closest('.swatch[data-color]');
       if (!btn) return;
       e.preventDefault();
-      state.activeTool = 'label';
       hideColorBoxPreview();
       applyLabelColor(btn.dataset.color);
+      selectTool('pointer');
     });
   }
 
