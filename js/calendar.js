@@ -113,6 +113,8 @@
   const labelTemplatePlaceCounts = {};
   let markMoveDrag = null;
   let markMoveDropTargetKey = null;
+  let labelMarqueeDrag = null;
+  let labelMarqueeEl = null;
   let copyFlashTimeout = null;
   let selection = new Set();
   let activeSaveId = null;
@@ -865,22 +867,67 @@
     if (!label?.anchorDate || SLASH_LABEL_TEXTS.has(label.text)) return;
     if (label.anchorOffsetPxY != null && Number.isFinite(label.anchorOffsetPxY)) return;
 
-    const layout = getPngExportLayout();
-    const weekCount =
-      label.anchorWeekCount ||
-      getWeekCountFromDom(label.panel) ||
-      getWeekCountForPanelKey(label.panel);
-    const areaH = getMonthGridAreaHeight(weekCount, layout);
+    const gridH = getMonthGridHeightForLabelAnchor(label);
     if (label.anchorOffsetY != null && Number.isFinite(label.anchorOffsetY)) {
-      label.anchorOffsetPxY = label.anchorOffsetY * areaH;
+      label.anchorOffsetPxY = label.anchorOffsetY * gridH;
     }
+  }
+
+  function getDateAreaCenterFromDom(dateKeyStr, panelKeyStr) {
+    const monthGrid = getMonthGridForPanelKey(panelKeyStr);
+    const cell = monthGrid?.querySelector(`.day-cell[data-date="${dateKeyStr}"]`);
+    if (!cell || !monthGrid) return null;
+
+    const gridRect = monthGrid.getBoundingClientRect();
+    const cellRect = cell.getBoundingClientRect();
+    if (gridRect.width <= 0 || gridRect.height <= 0) return null;
+
+    return {
+      panel: panelKeyStr,
+      x: clamp01((cellRect.left + cellRect.width / 2 - gridRect.left) / gridRect.width),
+      y: clamp01((cellRect.top + cellRect.height / 2 - gridRect.top) / gridRect.height),
+    };
+  }
+
+  function findAnchorDateForFloatingLabelFromDom(label) {
+    const monthGrid = getMonthGridForPanelKey(label.panel);
+    if (!monthGrid) return null;
+
+    const point = labelCoordsToClientPoint(label);
+    if (!point) return null;
+
+    for (const cell of monthGrid.querySelectorAll('.day-cell')) {
+      const rect = cell.getBoundingClientRect();
+      if (
+        point.x >= rect.left &&
+        point.x <= rect.right &&
+        point.y >= rect.top &&
+        point.y <= rect.bottom
+      ) {
+        return {
+          dateKey: cell.dataset.date,
+          hasNextPanel: getHasNextPanelForPanelKey(label.panel),
+        };
+      }
+    }
+    return null;
+  }
+
+  function getMonthGridHeightForLabelAnchor(label) {
+    const monthGrid = getMonthGridForPanelKey(label?.panel);
+    const gridRect = monthGrid?.getBoundingClientRect();
+    if (gridRect && gridRect.height > 0) return gridRect.height;
+
+    const weekCount = getWeekCountForPanelKey(label?.panel);
+    const layout = getPngExportLayout();
+    return getMonthGridAreaHeight(weekCount, layout);
   }
 
   function setFloatingLabelAnchorOffsets(label, center, weekCount, layout) {
     if (!label || !center) return;
-    const areaH = getMonthGridAreaHeight(weekCount, layout);
+    const gridH = getMonthGridHeightForLabelAnchor(label);
     label.anchorOffsetX = label.x - center.x;
-    label.anchorOffsetPxY = (label.y - center.y) * areaH;
+    label.anchorOffsetPxY = (label.y - center.y) * gridH;
     label.anchorWeekCount = weekCount;
     delete label.anchorOffsetY;
   }
@@ -894,6 +941,10 @@
   }
 
   function getDateAreaCenter(dateKey, panelYear, panelMonth, hasNextPanel) {
+    const panelKeyStr = panelKey(panelYear, panelMonth);
+    const domCenter = getDateAreaCenterFromDom(dateKey, panelKeyStr);
+    if (domCenter) return domCenter;
+
     const [y, m, d] = dateKey.split('-').map(Number);
     const gridPos = findDateInMonthGrid(y, m, d, panelYear, panelMonth, hasNextPanel);
     if (!gridPos) return null;
@@ -929,6 +980,15 @@
 
   function findAnchorDateForFloatingLabel(label, hasNextPanelOverride = null) {
     if (!label?.panel) return null;
+
+    const domMatch = findAnchorDateForFloatingLabelFromDom(label);
+    if (domMatch) {
+      if (hasNextPanelOverride != null) {
+        return { ...domMatch, hasNextPanel: hasNextPanelOverride };
+      }
+      return domMatch;
+    }
+
     const [panelYear, panelMonth] = label.panel.split('-').map(Number);
     const x = Number(label.x);
     const y = Number(label.y);
@@ -983,11 +1043,9 @@
 
   function captureFreeFloatingPanelAnchor(label) {
     if (!label || SLASH_LABEL_TEXTS.has(label.text)) return;
-    const weekCount = getWeekCountForPanelKey(label.panel);
-    const layout = getPngExportLayout();
-    const areaH = getMonthGridAreaHeight(weekCount, layout);
+    const gridH = getMonthGridHeightForLabelAnchor(label);
     label.panelAnchorX = clamp01(Number(label.x) || 0);
-    label.panelAnchorPxY = clamp01(Number(label.y) || 0) * areaH;
+    label.panelAnchorPxY = clamp01(Number(label.y) || 0) * gridH;
     delete label.anchorDate;
     delete label.anchorOffsetX;
     delete label.anchorOffsetPxY;
@@ -1005,11 +1063,9 @@
     ) {
       return;
     }
-    const weekCount = getWeekCountForPanelKey(label.panel);
-    const layout = getPngExportLayout();
-    const areaH = getMonthGridAreaHeight(weekCount, layout);
+    const gridH = getMonthGridHeightForLabelAnchor(label);
     label.panelAnchorX = clamp01(Number(label.x) || 0);
-    label.panelAnchorPxY = clamp01(Number(label.y) || 0) * areaH;
+    label.panelAnchorPxY = clamp01(Number(label.y) || 0) * gridH;
   }
 
   function layoutFreeFloatingLabelFromPanelAnchor(label) {
@@ -1023,31 +1079,28 @@
 
     ensureFreeFloatingPanelAnchor(label);
 
-    const weekCount = getWeekCountForPanelKey(label.panel);
-    const layout = getPngExportLayout();
-    const areaH = getMonthGridAreaHeight(weekCount, layout);
-    if (areaH <= 0) return false;
+    const gridH = getMonthGridHeightForLabelAnchor(label);
+    if (gridH <= 0) return false;
 
     const prevX = label.x;
     const prevY = label.y;
     label.x = clamp01(label.panelAnchorX);
-    label.y = clamp01(label.panelAnchorPxY / areaH);
+    label.y = clamp01(label.panelAnchorPxY / gridH);
     return prevX !== label.x || prevY !== label.y;
   }
 
   function storeFloatingLabelOffsetsFromPosition(label) {
     if (!label?.anchorDate) return;
-    const gridPos = dateKeyToGridFraction(label.anchorDate, 'center');
-    if (!gridPos) return;
 
-    const weekCount = getWeekCountForPanelKey(gridPos.panel);
-    const layout = getPngExportLayout();
-    const areaY = gridFractionYToAreaY(gridPos.y, weekCount, layout);
-    const areaH = getMonthGridAreaHeight(weekCount, layout);
+    const [panelYear, panelMonth] = label.panel.split('-').map(Number);
+    const hasNextPanel = getHasNextPanelForPanelKey(label.panel);
+    const center = getDateAreaCenter(label.anchorDate, panelYear, panelMonth, hasNextPanel);
+    if (!center) return;
 
-    label.anchorOffsetX = label.x - gridPos.x;
-    label.anchorOffsetPxY = (label.y - areaY) * areaH;
-    label.anchorWeekCount = weekCount;
+    const gridH = getMonthGridHeightForLabelAnchor(label);
+    label.anchorOffsetX = label.x - center.x;
+    label.anchorOffsetPxY = (label.y - center.y) * gridH;
+    label.anchorWeekCount = getWeekCountForPanelKey(label.panel);
     delete label.anchorOffsetY;
   }
 
@@ -1077,20 +1130,36 @@
     const visiblePanelKeys = new Set(getVisiblePanelKeys());
     if (!visiblePanelKeys.has(gridPos.panel)) return false;
 
-    const layout = getPngExportLayout();
+    const [panelYear, panelMonth] = gridPos.panel.split('-').map(Number);
+    const hasNextPanel = getHasNextPanelForPanelKey(gridPos.panel);
+    const center = getDateAreaCenter(label.anchorDate, panelYear, panelMonth, hasNextPanel);
+    if (!center) return false;
+
+    const gridH = getMonthGridHeightForLabelAnchor({ ...label, panel: gridPos.panel });
     const weekCount = getWeekCountForPanelKey(gridPos.panel);
-    const areaY = gridFractionYToAreaY(gridPos.y, weekCount, layout);
-    const areaH = getMonthGridAreaHeight(weekCount, layout);
 
     label.panel = gridPos.panel;
-    label.x = clamp01(gridPos.x + (Number(label.anchorOffsetX) || 0));
+    label.x = clamp01(center.x + (Number(label.anchorOffsetX) || 0));
     if (label.anchorOffsetPxY != null && Number.isFinite(label.anchorOffsetPxY)) {
-      label.y = clamp01(areaY + label.anchorOffsetPxY / areaH);
+      label.y = clamp01(center.y + label.anchorOffsetPxY / gridH);
     } else {
-      label.y = clamp01(areaY + (Number(label.anchorOffsetY) || 0));
+      label.y = clamp01(center.y + (Number(label.anchorOffsetY) || 0));
     }
     label.anchorWeekCount = weekCount;
     return true;
+  }
+
+  function floatingLabelNeedsAnchorRelayout(label) {
+    if (!label?.anchorDate) return false;
+
+    const visiblePanelKeys = getVisiblePanelKeys();
+    if (!visiblePanelKeys.includes(label.panel)) return true;
+
+    const gridPos = dateKeyToGridFraction(label.anchorDate, 'center');
+    if (!gridPos || !visiblePanelKeys.includes(gridPos.panel)) return true;
+
+    const weekCount = getWeekCountForPanelKey(gridPos.panel);
+    return label.anchorWeekCount == null || label.anchorWeekCount !== weekCount;
   }
 
   function layoutManualFloatingLabelsFromAnchors() {
@@ -1105,7 +1174,9 @@
 
       if (label.anchorDate) {
         ensureFloatingLabelPixelAnchor(label);
-        applyFloatingLabelAnchor(label);
+        if (floatingLabelNeedsAnchorRelayout(label)) {
+          applyFloatingLabelAnchor(label);
+        }
       } else {
         layoutFreeFloatingLabelFromPanelAnchor(label);
       }
@@ -3064,6 +3135,104 @@
     syncFloatingLabelSelection();
   }
 
+  function ensureLabelMarqueeElement() {
+    if (labelMarqueeEl) return labelMarqueeEl;
+    labelMarqueeEl = document.createElement('div');
+    labelMarqueeEl.className = 'label-marquee-select';
+    labelMarqueeEl.hidden = true;
+    labelMarqueeEl.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(labelMarqueeEl);
+    return labelMarqueeEl;
+  }
+
+  function canStartLabelMarqueeFromTarget(e) {
+    if (state.activeTool !== 'pointer' || isEraserPointer(e)) return false;
+    if (e.target.closest('.floating-label-wrap')) return false;
+    if (e.target.closest('.month-panel-remove-btn, .add-month-btn, .panel-controls-root')) {
+      return false;
+    }
+    return Boolean(e.target.closest('#calendar-stack'));
+  }
+
+  function startLabelMarqueeDrag(e) {
+    e.preventDefault();
+    labelMarqueeDrag = {
+      startX: e.clientX,
+      startY: e.clientY,
+      currentX: e.clientX,
+      currentY: e.clientY,
+      moved: false,
+    };
+    updateLabelMarqueeRect();
+  }
+
+  function updateLabelMarqueeRect() {
+    if (!labelMarqueeDrag) return;
+
+    const { startX, startY, currentX, currentY } = labelMarqueeDrag;
+    const width = Math.abs(currentX - startX);
+    const height = Math.abs(currentY - startY);
+    if (width + height >= 4) {
+      labelMarqueeDrag.moved = true;
+    }
+
+    const el = ensureLabelMarqueeElement();
+    el.hidden = false;
+    el.style.display = 'block';
+    el.style.left = `${Math.min(startX, currentX)}px`;
+    el.style.top = `${Math.min(startY, currentY)}px`;
+    el.style.width = `${width}px`;
+    el.style.height = `${height}px`;
+
+    if (labelMarqueeDrag.moved) {
+      selectFloatingLabelsInMarquee();
+    }
+  }
+
+  function rectsIntersect(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  }
+
+  function selectFloatingLabelsInMarquee() {
+    if (!labelMarqueeEl || labelMarqueeEl.hidden) return;
+
+    const marqueeRect = labelMarqueeEl.getBoundingClientRect();
+    if (marqueeRect.width <= 0 && marqueeRect.height <= 0) return;
+
+    const selected = [];
+    stackEl.querySelectorAll('.floating-label-wrap:not(.is-slash-label)').forEach((wrap) => {
+      if (rectsIntersect(marqueeRect, wrap.getBoundingClientRect())) {
+        selected.push(wrap.dataset.id);
+      }
+    });
+
+    selectedFloatingLabelIds.clear();
+    selected.forEach((id) => selectedFloatingLabelIds.add(id));
+    primaryFloatingLabelId = selected.length ? selected.at(-1) : null;
+    syncFloatingLabelSelection();
+  }
+
+  function onLabelMarqueeMove(e) {
+    if (!labelMarqueeDrag) return;
+    labelMarqueeDrag.currentX = e.clientX;
+    labelMarqueeDrag.currentY = e.clientY;
+    updateLabelMarqueeRect();
+  }
+
+  function endLabelMarqueeDrag() {
+    if (!labelMarqueeDrag) return;
+
+    if (labelMarqueeDrag.moved) {
+      selectFloatingLabelsInMarquee();
+    }
+
+    labelMarqueeDrag = null;
+    if (labelMarqueeEl) {
+      labelMarqueeEl.hidden = true;
+      labelMarqueeEl.style.display = 'none';
+    }
+  }
+
   function focusFloatingLabelInSelection(id) {
     if (!selectedFloatingLabelIds.has(id)) return false;
     primaryFloatingLabelId = id;
@@ -3579,24 +3748,147 @@
       .map((id) => {
         const label = getFloatingLabelById(id);
         if (!label) return null;
-        return { id, x: label.x, y: label.y, panel: label.panel };
+        const point = labelCoordsToClientPoint(label);
+        return {
+          id,
+          x: label.x,
+          y: label.y,
+          panel: label.panel,
+          clientX: point?.x ?? null,
+          clientY: point?.y ?? null,
+        };
       })
       .filter(Boolean);
   }
 
-  function moveFloatingLabelGroupFromPixelDelta(drag, pixelDx, pixelDy) {
+  function getMonthGridRectsForLabelX(clientX) {
+    return [...stackEl.querySelectorAll('.month-grid')]
+      .map((grid) => ({ grid, rect: grid.getBoundingClientRect() }))
+      .filter(
+        ({ rect }) =>
+          clientX >= rect.left &&
+          clientX <= rect.right &&
+          rect.width > 0 &&
+          rect.height > 0
+      );
+  }
+
+  function getGroupDragTargetGrid(cursorX, cursorY, startPanelKey) {
+    const direct = getMonthGridAtPoint(cursorX, cursorY);
+    if (direct) return direct;
+
+    const grids = getMonthGridRectsForLabelX(cursorX)
+      .sort((a, b) => a.rect.top - b.rect.top)
+      .map(({ grid }) => grid);
+    if (grids.length === 0) {
+      return getMonthGridForPanelKey(startPanelKey);
+    }
+
+    for (let i = 0; i < grids.length - 1; i++) {
+      const upperRect = grids[i].getBoundingClientRect();
+      const lowerRect = grids[i + 1].getBoundingClientRect();
+      if (cursorY > upperRect.bottom && cursorY < lowerRect.top) {
+        const gapMid = (upperRect.bottom + lowerRect.top) / 2;
+        return cursorY >= gapMid ? grids[i + 1] : grids[i];
+      }
+    }
+
+    const firstRect = grids[0].getBoundingClientRect();
+    if (cursorY < firstRect.top) return grids[0];
+    return grids[grids.length - 1];
+  }
+
+  function finalizeFloatingLabelPositionAfterDrag(label) {
+    const monthGrid = getMonthGridForPanelKey(label.panel);
+    const rect = monthGrid?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return;
+
+    const clientX = rect.left + label.x * rect.width;
+    const clientY = rect.top + label.y * rect.height;
+    const targetGrid = getMonthGridAtPoint(clientX, clientY) || monthGrid;
+    const targetRect = targetGrid.getBoundingClientRect();
+    const targetPanel = getPanelKeyFromMonthGrid(targetGrid);
+
+    if (targetPanel) label.panel = targetPanel;
+    label.x = clamp01((clientX - targetRect.left) / targetRect.width);
+    label.y = clamp01((clientY - targetRect.top) / targetRect.height);
+    ensureFloatingLabelInCorrectLayer(label);
+    updateFloatingLabelElement(label);
+  }
+
+  function constrainGroupPixelDelta(groupStarts, pixelDx, pixelDy) {
+    let minDx = -Infinity;
+    let maxDx = Infinity;
+    let minDy = -Infinity;
+    let maxDy = Infinity;
+
+    for (const start of groupStarts) {
+      if (start.clientX == null || start.clientY == null) continue;
+
+      let gridRects = getMonthGridRectsForLabelX(start.clientX);
+      if (gridRects.length === 0) {
+        const monthGrid =
+          getMonthGridAtPoint(start.clientX, start.clientY) ||
+          getMonthGridForPanelKey(start.panel);
+        const rect = monthGrid?.getBoundingClientRect();
+        if (rect && rect.width > 0 && rect.height > 0) {
+          gridRects = [{ grid: monthGrid, rect }];
+        }
+      }
+
+      if (gridRects.length === 0) continue;
+
+      let labelMinDx = Infinity;
+      let labelMaxDx = -Infinity;
+      let labelMinDy = Infinity;
+      let labelMaxDy = -Infinity;
+
+      gridRects.forEach(({ rect }) => {
+        labelMinDx = Math.min(labelMinDx, rect.left - start.clientX);
+        labelMaxDx = Math.max(labelMaxDx, rect.right - start.clientX);
+        labelMinDy = Math.min(labelMinDy, rect.top - start.clientY);
+        labelMaxDy = Math.max(labelMaxDy, rect.bottom - start.clientY);
+      });
+
+      minDx = Math.max(minDx, labelMinDx);
+      maxDx = Math.min(maxDx, labelMaxDx);
+      minDy = Math.max(minDy, labelMinDy);
+      maxDy = Math.min(maxDy, labelMaxDy);
+    }
+
+    if (!Number.isFinite(minDy) || !Number.isFinite(minDx) || minDy > maxDy || minDx > maxDx) {
+      return { pixelDx: 0, pixelDy: 0 };
+    }
+
+    return {
+      pixelDx: Math.max(minDx, Math.min(maxDx, pixelDx)),
+      pixelDy: Math.max(minDy, Math.min(maxDy, pixelDy)),
+    };
+  }
+
+  function moveFloatingLabelGroupFromPixelDelta(drag, pixelDx, pixelDy, cursorX, cursorY) {
     if (!drag.groupStarts?.length) return;
+
+    const constrained = constrainGroupPixelDelta(drag.groupStarts, pixelDx, pixelDy);
+    pixelDx = constrained.pixelDx;
+    pixelDy = constrained.pixelDy;
+
+    const targetGrid = getGroupDragTargetGrid(cursorX, cursorY, drag.startPanel);
+    const rect = targetGrid?.getBoundingClientRect();
+    const targetPanel = targetGrid ? getPanelKeyFromMonthGrid(targetGrid) : null;
+    if (!targetGrid || !targetPanel || !rect || rect.width <= 0 || rect.height <= 0) return;
 
     drag.groupStarts.forEach((start) => {
       const label = getFloatingLabelById(start.id);
       if (!label || SLASH_LABEL_TEXTS.has(label.text)) return;
+      if (start.clientX == null || start.clientY == null) return;
 
-      const monthGrid = getMonthGridForPanelKey(start.panel);
-      const rect = monthGrid?.getBoundingClientRect();
-      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      const cx = start.clientX + pixelDx;
+      const cy = start.clientY + pixelDy;
 
-      label.x = clamp01(start.x + pixelDx / rect.width);
-      label.y = clamp01(start.y + pixelDy / rect.height);
+      label.panel = targetPanel;
+      label.x = (cx - rect.left) / rect.width;
+      label.y = (cy - rect.top) / rect.height;
       ensureFloatingLabelInCorrectLayer(label);
       updateFloatingLabelElement(label);
     });
@@ -3834,7 +4126,13 @@
         floatingLabelDrag,
         e
       );
-      moveFloatingLabelGroupFromPixelDelta(floatingLabelDrag, cdx, cdy);
+      moveFloatingLabelGroupFromPixelDelta(
+        floatingLabelDrag,
+        cdx,
+        cdy,
+        e.clientX,
+        e.clientY
+      );
       clearFloatingLabelSnapGuides();
       return;
     }
@@ -3859,6 +4157,7 @@
   }
 
   function onFloatingLabelPointerMove(e) {
+    onLabelMarqueeMove(e);
     onFloatingLabelMove(e);
     onFloatingLabelResizeMove(e);
   }
@@ -3883,7 +4182,11 @@
         : [drag.id];
       movedIds.forEach((id) => {
         const label = getFloatingLabelById(id);
-        if (label) captureFloatingLabelAnchor(label);
+        if (!label) return;
+        if (drag.groupStarts?.length > 1) {
+          finalizeFloatingLabelPositionAfterDrag(label);
+        }
+        captureFloatingLabelAnchor(label);
       });
       saveSession();
       return;
@@ -4112,7 +4415,6 @@
     clearFloatingLabelSnapGuides();
     sanitizeViewState();
     syncAllSlashLabels();
-    const labelsLayoutChanged = layoutManualFloatingLabelsFromAnchors();
     stackEl.innerHTML = '';
 
     for (let i = 0; i < state.visibleMonthCount; i++) {
@@ -4126,6 +4428,7 @@
       );
     }
 
+    const labelsLayoutChanged = layoutManualFloatingLabelsFromAnchors();
     syncFloatingLabelWrapPositionsFromState();
 
     if (labelsLayoutChanged && !isApplyingHistory) {
@@ -4208,18 +4511,25 @@
     const normalized = normalizeLabelAlign(align);
     state.labelStyle.align = normalized;
 
-    const targetId = primaryFloatingLabelId || editingFloatingLabelId;
-    if (targetId) {
-      const label = getFloatingLabelById(targetId);
-      if (label && !SLASH_LABEL_TEXTS.has(label.text)) {
-        const currentAlign = getFloatingLabelAlign(label);
-        if (currentAlign !== normalized) {
-          recordUndoBeforeChange();
-          label.align = normalized;
-          updateFloatingLabelElement(label);
+    let labels = getSelectedEditableFloatingLabels();
+    if (labels.length === 0) {
+      const targetId = primaryFloatingLabelId || editingFloatingLabelId;
+      if (targetId) {
+        const label = getFloatingLabelById(targetId);
+        if (label && !SLASH_LABEL_TEXTS.has(label.text)) {
+          labels = [label];
         }
       }
     }
+
+    let changed = false;
+    labels.forEach((label) => {
+      if (getFloatingLabelAlign(label) === normalized) return;
+      if (!changed) recordUndoBeforeChange();
+      changed = true;
+      label.align = normalized;
+      updateFloatingLabelElement(label);
+    });
 
     saveSession();
     updateToolbar();
@@ -4232,9 +4542,15 @@
   }
 
   function setFloatingLabelClientPoint(label, clientX, clientY) {
-    const monthGrid = getMonthGridForPanelKey(label.panel);
+    const monthGrid =
+      getMonthGridAtPoint(clientX, clientY) || getMonthGridForPanelKey(label.panel);
     const rect = monthGrid?.getBoundingClientRect();
     if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+
+    const panelKeyStr = getPanelKeyFromMonthGrid(monthGrid);
+    if (panelKeyStr) {
+      label.panel = panelKeyStr;
+    }
 
     label.x = clamp01((clientX - rect.left) / rect.width);
     label.y = clamp01((clientY - rect.top) / rect.height);
@@ -4454,20 +4770,25 @@
       if (groupBtn) {
         if (groupBtn.disabled) return;
         e.preventDefault();
-        state.activeTool = 'label';
-        hideColorBoxPreview();
+        e.stopPropagation();
         applyLabelGroupAlign(groupBtn.dataset.labelGroupAlign);
-        syncCalendarToolCursor();
+        updateToolbar();
         return;
       }
 
       const btn = e.target.closest('.label-align-btn[data-label-align]');
       if (!btn) return;
       e.preventDefault();
-      state.activeTool = 'label';
-      hideColorBoxPreview();
+      e.stopPropagation();
       applyLabelAlign(btn.dataset.labelAlign);
-      syncCalendarToolCursor();
+    });
+    root.addEventListener('click', (e) => {
+      if (
+        e.target.closest('.label-align-btn[data-label-align], .label-align-btn[data-label-group-align]')
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
     });
   }
 
@@ -4483,7 +4804,7 @@
       return state.activeTool === 'label' && btn.dataset.color === getDisplayedLabelColor();
     }
     if (tool === 'label' && btn.dataset.labelAlign) {
-      return state.activeTool === 'label' && btn.dataset.labelAlign === getDisplayedLabelAlign();
+      return btn.dataset.labelAlign === getDisplayedLabelAlign();
     }
     if (tool === 'label' && btn.dataset.labelGroupAlign) {
       return false;
@@ -4740,6 +5061,8 @@
       btn.addEventListener('click', () => {
         if (btn.dataset.tool === 'label' && btn.dataset.color) return;
         if (btn.dataset.tool === 'label' && btn.dataset.labelTemplate) return;
+        if (btn.dataset.tool === 'label' && btn.dataset.labelAlign) return;
+        if (btn.dataset.tool === 'label' && btn.dataset.labelGroupAlign) return;
         state.activeTool = btn.dataset.tool;
         if (btn.dataset.slashMode) {
           state.slashMode = btn.dataset.slashMode;
@@ -4984,12 +5307,8 @@
         return;
       }
 
-      if (state.activeTool === 'pointer' && !isEraserPointer(e)) {
-        const cell = e.target.closest('.day-cell');
-        if (cell) {
-          e.preventDefault();
-          startMarkMoveDrag(cell.dataset.date, e);
-        }
+      if (canStartLabelMarqueeFromTarget(e)) {
+        startLabelMarqueeDrag(e);
         return;
       }
 
@@ -5014,6 +5333,7 @@
       onMouseOver(e);
     });
     document.addEventListener('mouseup', (e) => {
+      endLabelMarqueeDrag();
       endMarkMoveDrag();
       endFloatingLabelDrag(e);
       endFloatingLabelResize();
