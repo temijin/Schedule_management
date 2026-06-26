@@ -599,6 +599,13 @@ html {
   z-index: 1;
 }
 
+.floating-label-inner {
+  position: relative;
+  display: inline-block;
+  width: max-content;
+  max-width: 100%;
+}
+
 .floating-label-wrap.is-selected {
   outline: 1px dashed #5c6bc0;
   outline-offset: 4px;
@@ -700,8 +707,8 @@ html {
   z-index: 1;
 }
 
-.floating-label-wrap.is-selected .floating-label-delete,
-.floating-label-wrap.is-selected .floating-label-resize,
+.floating-label-wrap.is-control-active .floating-label-delete,
+.floating-label-wrap.is-control-active .floating-label-resize,
 .floating-label-wrap.is-editing .floating-label-delete,
 .floating-label-wrap.is-editing .floating-label-resize {
   display: flex;

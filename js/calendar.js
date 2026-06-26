@@ -3049,6 +3049,17 @@
     input.focus();
   }
 
+  function shouldShowFloatingLabelControls(id) {
+    if (id === editingFloatingLabelId) return true;
+    if (!selectedFloatingLabelIds.has(id)) return false;
+    return selectedFloatingLabelIds.size <= 1;
+  }
+
+  function syncFloatingLabelControlState(wrap) {
+    if (!wrap || wrap.classList.contains('is-slash-label')) return;
+    wrap.classList.toggle('is-control-active', shouldShowFloatingLabelControls(wrap.dataset.id));
+  }
+
   function createFloatingLabelWrap(label) {
     const isEditing = label.id === editingFloatingLabelId;
     const wrap = document.createElement('div');
@@ -3063,13 +3074,17 @@
       if (isEditing) {
         wrap.classList.add('is-editing');
       }
+      syncFloatingLabelControlState(wrap);
     }
     wrap.dataset.id = label.id;
     wrap.style.left = `${label.x * 100}%`;
     wrap.style.top = `${label.y * 100}%`;
 
+    const inner = document.createElement('div');
+    inner.className = 'floating-label-inner';
+
     if (isEditing) {
-      wrap.appendChild(createFloatingLabelInputElement(label));
+      inner.appendChild(createFloatingLabelInputElement(label));
     } else {
       const textEl = document.createElement('span');
       textEl.className = 'floating-label-text';
@@ -3077,7 +3092,7 @@
       textEl.style.color = label.color || '#111';
       textEl.style.fontSize = `${getFloatingLabelSize(label)}px`;
       textEl.style.textAlign = getFloatingLabelAlign(label);
-      wrap.appendChild(textEl);
+      inner.appendChild(textEl);
     }
 
     const deleteBtn = document.createElement('button');
@@ -3090,14 +3105,16 @@
     resizeHandle.className = 'floating-label-resize';
     resizeHandle.setAttribute('aria-hidden', 'true');
 
-    wrap.appendChild(deleteBtn);
-    wrap.appendChild(resizeHandle);
+    inner.appendChild(deleteBtn);
+    inner.appendChild(resizeHandle);
+    wrap.appendChild(inner);
     return wrap;
   }
 
   function syncFloatingLabelSelection() {
     stackEl.querySelectorAll('.floating-label-wrap').forEach((el) => {
       el.classList.toggle('is-selected', selectedFloatingLabelIds.has(el.dataset.id));
+      syncFloatingLabelControlState(el);
     });
     syncLabelGroupAlignButtons();
   }
@@ -3408,7 +3425,7 @@
   }
 
   function updateFloatingLabelWrapPosition(label) {
-    const wrap = stackEl.querySelector(`.floating-label-wrap[data-id="${label.id}"]`);
+    const wrap = getFloatingLabelWrapById(label.id);
     if (!wrap) return;
     wrap.style.left = `${label.x * 100}%`;
     wrap.style.top = `${label.y * 100}%`;
@@ -3418,7 +3435,7 @@
   function syncFloatingLabelWrapPositionsFromState() {
     state.floatingLabels.forEach((label) => {
       if (SLASH_LABEL_TEXTS.has(label.text)) return;
-      const wrap = stackEl.querySelector(`.floating-label-wrap[data-id="${label.id}"]`);
+      const wrap = getFloatingLabelWrapById(label.id);
       if (!wrap) {
         const layer = getLabelsLayerForPanelKey(label.panel);
         if (!layer) return;
@@ -3611,8 +3628,33 @@
     return null;
   }
 
+  function getFloatingLabelWrapsById(id) {
+    return [...stackEl.querySelectorAll(`.floating-label-wrap[data-id="${id}"]`)];
+  }
+
+  function getFloatingLabelWrapById(id) {
+    const wraps = getFloatingLabelWrapsById(id);
+    if (wraps.length <= 1) return wraps[0] || null;
+
+    const label = getFloatingLabelById(id);
+    const layer = label ? getLabelsLayerForPanelKey(label.panel) : null;
+    let keep = wraps.find((wrap) => wrap.parentElement === layer) || wraps[0];
+    wraps.forEach((wrap) => {
+      if (wrap !== keep) wrap.remove();
+    });
+    return keep;
+  }
+
   function ensureFloatingLabelInCorrectLayer(label) {
-    const el = stackEl.querySelector(`.floating-label-wrap[data-id="${label.id}"]`);
+    const wraps = getFloatingLabelWrapsById(label.id);
+    let el = wraps[0] || null;
+    if (wraps.length > 1) {
+      const layer = getLabelsLayerForPanelKey(label.panel);
+      el = wraps.find((wrap) => wrap.parentElement === layer) || wraps[0];
+      wraps.forEach((wrap) => {
+        if (wrap !== el) wrap.remove();
+      });
+    }
     if (!el) return;
     const layer = getLabelsLayerForPanelKey(label.panel);
     if (layer && el.parentElement !== layer) {
@@ -3697,7 +3739,7 @@
 
   function updateFloatingLabelElement(label) {
     ensureFloatingLabelInCorrectLayer(label);
-    const el = stackEl.querySelector(`.floating-label-wrap[data-id="${label.id}"]`);
+    const el = getFloatingLabelWrapById(label.id);
     if (!el) return;
     el.style.left = `${label.x * 100}%`;
     el.style.top = `${label.y * 100}%`;
