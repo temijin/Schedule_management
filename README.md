@@ -1,1 +1,1 @@
-https://temijin.github.io/Schedule_management/?v=1.2.1
+https://temijin.github.io/Schedule_management/?v=1.3.1
