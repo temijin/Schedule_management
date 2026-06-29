@@ -77,7 +77,15 @@
             </div>
           </div>
 
-          <div id="calendar-stack" class="calendar-stack"></div>
+          <div class="calendar-nav-wrap">
+            <button type="button" id="btn-month-prev" class="month-nav-btn month-nav-btn--prev" title="이전 달" aria-label="이전 달">
+              <span class="month-nav-icon" aria-hidden="true"></span>
+            </button>
+            <div id="calendar-stack" class="calendar-stack"></div>
+            <button type="button" id="btn-month-next" class="month-nav-btn month-nav-btn--next" title="다음 달" aria-label="다음 달">
+              <span class="month-nav-icon" aria-hidden="true"></span>
+            </button>
+          </div>
           <div id="panel-controls-root" class="panel-controls-root"></div>
         </div>
       </div>
@@ -239,11 +247,12 @@
 
   <dialog id="update-news-dialog" class="save-dialog update-news-dialog">
     <div class="update-news-body">
-      <h3 class="save-dialog-title">2026.06.26 업데이트</h3>
+      <h3 class="save-dialog-title">2026.06.29 업데이트</h3>
       <ol class="update-news-list">
-        <li><strong>빈공간 드래그</strong>하여 텍스트 <strong>다중선택</strong>이 가능해졌습니다.</li>
-        <li>다음달 추가 상태에서, <strong>현재 달을 삭제</strong>할 수 있습니다.<br>(다음 달이 현재달이 됨)</li>
-        <li><strong>텍스트 위치정렬</strong> 버튼 추가 (<strong>2개 이상</strong> 선택 시 사용 가능)</li>
+        <li>텍스트 버튼 작동되지 않는 버그 수정</li>
+        <li>저장 시, 기본 슬래시 이미지 출력되지 않는 버그 수정</li>
+        <li><strong>이전달, 다음달 이동</strong> 화살표 버튼 추가</li>
+        <li><strong>재등록결제일</strong> 텍스트 템플릿 추가<br><span class="update-news-note">(종료일, 재등록결제일 원하는 거 쓰시면 됩니다)</span></li>
       </ol>
       <label class="update-news-dismiss">
         <input type="checkbox" id="update-news-dismiss">

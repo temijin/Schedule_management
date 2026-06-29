@@ -6,7 +6,7 @@
   const STORAGE_KEY_LEGACY = 'calendar-markings-v2';
   const STORAGE_KEY_V1 = 'calendar-markings-v1';
   const DEFAULT_MAX_SAVES = 100;
-  const UPDATE_NEWS_VERSION = '10';
+  const UPDATE_NEWS_VERSION = '11';
   const UPDATE_NEWS_DISMISS_KEY = 'calendar-update-news-dismissed';
   const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
   const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
@@ -54,10 +54,14 @@
   const LABEL_TEMPLATES = [
     { text: '시작일', defaultColor: '#111111' },
     { text: '종료일', defaultColor: LABEL_TEXT_COLORS[2] },
+    { text: '재등록결제일', defaultColor: LABEL_TEXT_COLORS[2] },
   ];
   const LABEL_TEMPLATE_BY_TEXT = Object.fromEntries(
     LABEL_TEMPLATES.map((item) => [item.text, item])
   );
+  const LABEL_TEMPLATE_TEXTS = new Set(LABEL_TEMPLATES.map((item) => item.text));
+  /** 템플릿 첫 배치 Y — 달력 날짜 영역 중앙에서 위로 (px) */
+  const LABEL_TEMPLATE_BASE_OFFSET_Y_PX = 36;
 
   function getLabelTemplateDefaultColor(text) {
     const template = LABEL_TEMPLATE_BY_TEXT[text];
@@ -110,7 +114,6 @@
   let editingFloatingLabelId = null;
   let copiedFloatingLabel = null;
   let pasteRepeatCount = 0;
-  const labelTemplatePlaceCounts = {};
   let markMoveDrag = null;
   let markMoveDropTargetKey = null;
   let labelMarqueeDrag = null;
@@ -1694,6 +1697,9 @@
   }
 
   function selectTool(tool) {
+    if (tool !== 'label' && tool !== 'pointer' && isFloatingLabelEditing()) {
+      commitFloatingLabelEdit({ switchToPointer: false });
+    }
     if (tool !== state.activeTool) {
       markMoveDrag = null;
       markMoveDropTargetKey = null;
@@ -1739,6 +1745,11 @@
     if (tool === 'label' && state.activeTool === 'label') {
       const nextColor = cycleNext(LABEL_TEXT_COLORS, getDisplayedLabelColor(), normalizeHexColor);
       applyLabelColor(nextColor);
+      return;
+    }
+
+    if (tool === 'pointer' && state.activeTool === 'pointer' && isFloatingLabelEditing()) {
+      commitFloatingLabelEdit();
       return;
     }
 
@@ -1967,15 +1978,8 @@
     return snap.outlineGroups.find((g) => g.dates.includes(key)) || null;
   }
 
-  function slashModeFromSnapshot(snap, key) {
-    const slash = snap.slashes[key];
-    if (!slash || typeof slash !== 'object') return 'plain';
-    return normalizeSlashMode(slash.mode);
-  }
-
   function hasVisibleSlash(snap, key) {
-    const mode = slashModeFromSnapshot(snap, key);
-    return mode !== 'plain';
+    return Boolean(snap.slashes[key]);
   }
 
   function measureMonthPanelHeight(layout, weekCount) {
@@ -4480,6 +4484,16 @@
     });
   }
 
+  function shiftViewMonth(offset) {
+    recordUndoBeforeChange();
+    const next = addMonths(state.viewYear, state.viewMonth, offset);
+    state.viewYear = next.year;
+    state.viewMonth = next.month;
+    activePanelKey = panelKey(state.viewYear, state.viewMonth);
+    saveSession();
+    render();
+  }
+
   function render() {
     clearMarkMovePreview();
     clearFloatingLabelSnapGuides();
@@ -4518,6 +4532,7 @@
     focusEditingFloatingLabelInput();
     scheduleAlignScheduleGroup();
     syncActivePanelKeyAfterRender();
+    scheduleBlurNoTextCaretButtons();
   }
 
   function getActivePickerColor() {
@@ -4762,14 +4777,34 @@
     setActivePanelKey(getPanelKeyFromMonthPanel(panel));
   }
 
+  function getPanelCenterLabelCoords(panelKeyStr) {
+    const monthGrid = getMonthGridForPanelKey(panelKeyStr);
+    const snapLines = monthGrid ? getCalendarCenterSnapLines(monthGrid) : [];
+    const xLine = snapLines.find((line) => line.axis === 'x');
+    const yLine = snapLines.find((line) => line.axis === 'y');
+    const x = xLine?.value ?? 0.5;
+    let y = yLine?.value ?? 0.5;
+    const rect = monthGrid?.getBoundingClientRect();
+    if (rect && rect.height > 0) {
+      y = clamp01(y - LABEL_TEMPLATE_BASE_OFFSET_Y_PX / rect.height);
+    }
+    return { x, y };
+  }
+
+  function getPanelTemplateLabelCount(panelKeyStr) {
+    return state.floatingLabels.filter(
+      (label) => label.panel === panelKeyStr && LABEL_TEMPLATE_TEXTS.has(label.text)
+    ).length;
+  }
+
   function placeFloatingLabelTemplate(text) {
     if (!text) return;
 
     const panel = getTargetPanelKeyForTemplates();
-    const baseX = 0.12;
-    const baseY = 0.08;
-    const repeatIndex = labelTemplatePlaceCounts[text] || 0;
-    labelTemplatePlaceCounts[text] = repeatIndex + 1;
+    const center = getPanelCenterLabelCoords(panel);
+    const baseX = center.x;
+    const baseY = center.y;
+    const repeatIndex = getPanelTemplateLabelCount(panel);
 
     const offset =
       repeatIndex === 0
@@ -4822,7 +4857,7 @@
     if (!root) return;
     root.innerHTML = LABEL_TEXT_COLORS.map(
       (swatchColor, index) =>
-        `<button type="button" class="swatch" data-tool="label" data-color="${swatchColor}" style="--swatch:${swatchColor}" title="${LABEL_TEXT_COLOR_TITLES[index]}"><span class="swatch-letter" aria-hidden="true">T</span></button>`
+        `<button type="button" class="swatch" data-tool="label" data-color="${swatchColor}" style="--swatch:${swatchColor}" title="${LABEL_TEXT_COLOR_TITLES[index]}" aria-label="${LABEL_TEXT_COLOR_TITLES[index]}"></button>`
     ).join('');
 
     if (root.dataset.bound === '1') return;
@@ -4833,7 +4868,12 @@
       e.preventDefault();
       hideColorBoxPreview();
       applyLabelColor(btn.dataset.color);
-      selectTool('pointer');
+      selectTool('label');
+    });
+    root.addEventListener('click', (e) => {
+      const btn = e.target.closest('.swatch[data-color]');
+      if (!btn) return;
+      e.preventDefault();
     });
   }
 
@@ -5045,6 +5085,87 @@
     selectionUsesEraser = false;
   }
 
+  const NO_TEXT_CARET_BUTTON_SELECTOR = [
+    '.add-month-btn',
+    '.month-nav-btn',
+    '.month-panel-remove-btn',
+    '.floating-label-delete',
+    '.label-template-btn',
+    '.tool-icon-btn',
+    '.label-align-btn',
+    '.header-btn',
+    '.sort-btn',
+    '.swatch[data-tool]',
+    '.dialog-btn',
+  ].join(', ');
+
+  const CALENDAR_WORKSPACE_INTERACTIVE_SELECTOR = [
+    'button',
+    'input',
+    'select',
+    'textarea',
+    'a',
+    '.floating-label-wrap',
+    '.day-cell',
+    '.month-grid',
+    '.month-panel-remove-btn',
+  ].join(', ');
+
+  function isNoTextCaretButton(el) {
+    return Boolean(el?.closest?.(NO_TEXT_CARET_BUTTON_SELECTOR));
+  }
+
+  function blurNoTextCaretButtonsIfFocused() {
+    const active = document.activeElement;
+    if (!active || active === document.body) return;
+    if (isNoTextCaretButton(active)) {
+      active.blur();
+    }
+  }
+
+  function scheduleBlurNoTextCaretButtons() {
+    requestAnimationFrame(() => {
+      blurNoTextCaretButtonsIfFocused();
+    });
+  }
+
+  function isCalendarWorkspaceBlankClick(target) {
+    if (!target?.closest?.('.calendar-column')) return false;
+    return !target.closest(CALENDAR_WORKSPACE_INTERACTIVE_SELECTOR);
+  }
+
+  function bindNoTextCaretButtons() {
+    document.addEventListener(
+      'mousedown',
+      (e) => {
+        if (!isNoTextCaretButton(e.target)) return;
+        e.preventDefault();
+      },
+      true
+    );
+
+    document.addEventListener(
+      'click',
+      (e) => {
+        const btn = e.target.closest(NO_TEXT_CARET_BUTTON_SELECTOR);
+        if (!btn || btn.type === 'submit') return;
+        btn.blur();
+      },
+      true
+    );
+  }
+
+  function bindCalendarWorkspaceBlankClick() {
+    document.addEventListener(
+      'mousedown',
+      (e) => {
+        if (!isCalendarWorkspaceBlankClick(e.target)) return;
+        scheduleBlurNoTextCaretButtons();
+      },
+      true
+    );
+  }
+
   function initMonthSelect() {
     selectMonth.innerHTML = MONTHS.map(
       (m) => `<option value="${m}">${m}월</option>`
@@ -5119,6 +5240,13 @@
       render();
     });
 
+    document.getElementById('btn-month-prev')?.addEventListener('click', () => {
+      shiftViewMonth(-1);
+    });
+    document.getElementById('btn-month-next')?.addEventListener('click', () => {
+      shiftViewMonth(1);
+    });
+
     document.getElementById('btn-new').addEventListener('click', createNew);
     document.getElementById('btn-save').addEventListener('click', saveCurrent);
 
@@ -5141,7 +5269,11 @@
         if (btn.dataset.tool === 'label' && btn.dataset.labelTemplate) return;
         if (btn.dataset.tool === 'label' && btn.dataset.labelAlign) return;
         if (btn.dataset.tool === 'label' && btn.dataset.labelGroupAlign) return;
-        state.activeTool = btn.dataset.tool;
+        if (btn.dataset.tool === 'pointer' && isFloatingLabelEditing()) {
+          commitFloatingLabelEdit();
+          return;
+        }
+        selectTool(btn.dataset.tool);
         if (btn.dataset.slashMode) {
           state.slashMode = btn.dataset.slashMode;
         }
@@ -5167,6 +5299,8 @@
 
     document.addEventListener('mousemove', onFloatingLabelPointerMove);
     document.addEventListener('mousedown', handleFloatingLabelOutsidePointer, true);
+    bindNoTextCaretButtons();
+    bindCalendarWorkspaceBlankClick();
 
     document.getElementById('save-form').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -5383,6 +5517,15 @@
           createFloatingLabelAt(e);
         }
         return;
+      }
+
+      if (state.activeTool === 'pointer' && !isEraserPointer(e)) {
+        const cell = e.target.closest('.day-cell');
+        if (cell && collectMarkMovePayload(cell.dataset.date)) {
+          e.preventDefault();
+          startMarkMoveDrag(cell.dataset.date, e);
+          return;
+        }
       }
 
       if (canStartLabelMarqueeFromTarget(e)) {

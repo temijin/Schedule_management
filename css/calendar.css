@@ -126,6 +126,19 @@ html {
   --other-month-text: #d0d0d0;
   --other-month-text-on-color-box: #929292;
   --scrollbar-thumb: #d4d4d4;
+  --month-nav-btn-height: 60px;
+  --month-nav-icon-size: 42px;
+  --month-nav-chevron-size: 17px;
+  --month-nav-chevron-border: 3.5px;
+  --month-nav-offset-top: calc(
+    20px * var(--calendar-ui-scale) +
+    var(--calendar-title-font-size) +
+    var(--calendar-title-weekdays-gap) +
+    var(--calendar-text-size) +
+    (var(--calendar-row-gap) - (var(--calendar-cell-h) - var(--calendar-text-size)) / 2) +
+    1.5 * var(--calendar-cell-h) -
+    var(--month-nav-btn-height) / 2
+  );
 }
 
 .app-layout {
@@ -158,7 +171,9 @@ html {
 .sidebar-column,
 .app-top-bar,
 .panel-controls-root,
-.nav-row {
+.nav-row,
+.calendar-nav-wrap,
+.month-nav-btn {
   cursor: auto;
 }
 
@@ -357,6 +372,60 @@ html {
 }
 
 /* Calendar stack */
+.calendar-nav-wrap {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.month-nav-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--month-nav-btn-height);
+  height: var(--month-nav-btn-height);
+  margin-top: var(--month-nav-offset-top);
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: #111;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.month-nav-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.month-nav-icon {
+  display: block;
+  flex-shrink: 0;
+  width: var(--month-nav-icon-size);
+  height: var(--month-nav-icon-size);
+  position: relative;
+}
+
+.month-nav-icon::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--month-nav-chevron-size);
+  height: var(--month-nav-chevron-size);
+  border-right: var(--month-nav-chevron-border) solid #444444;
+  border-bottom: var(--month-nav-chevron-border) solid #444444;
+  transform: translate(-50%, -50%) rotate(-45deg);
+  box-sizing: border-box;
+}
+
+.month-nav-btn--prev .month-nav-icon::before {
+  transform: translate(-50%, -50%) rotate(135deg);
+}
+
 .calendar-stack {
   user-select: none;
   width: var(--calendar-card-width);
@@ -920,6 +989,8 @@ html {
   font-size: 18px;
   font-weight: 300;
   box-sizing: border-box;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .add-month-btn:hover {
@@ -1177,14 +1248,20 @@ html {
   justify-content: center;
   width: 32px;
   height: 32px;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.label-color-swatches .swatch-letter {
+.label-color-swatches .swatch::before {
+  content: 'T';
   color: #fff;
   font-family: "Times New Roman", Times, serif;
   font-size: 15px;
   font-weight: 400;
   line-height: 1;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .color-swatches {
@@ -1632,8 +1709,10 @@ html {
 }
 
 .col-delete {
-  width: 36px;
+  width: 52px;
+  min-width: 52px;
   text-align: center;
+  white-space: nowrap;
 }
 
 .sort-btn {
@@ -1823,6 +1902,11 @@ html {
   margin-top: 6px;
 }
 
+.update-news-note {
+  font-size: 13px;
+  color: #666;
+}
+
 .update-news-dismiss {
   display: flex;
   align-items: center;
@@ -1915,5 +1999,13 @@ html {
 
   .schedule-group {
     --schedule-align-offset: 0px;
+  }
+
+  .calendar-nav-wrap {
+    gap: 6px;
+    --month-nav-btn-height: 48px;
+    --month-nav-icon-size: 33px;
+    --month-nav-chevron-size: 14px;
+    --month-nav-chevron-border: 3px;
   }
 }
