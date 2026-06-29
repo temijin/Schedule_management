@@ -4844,11 +4844,9 @@
       if (!btn) return;
       e.preventDefault();
       const text = btn.dataset.labelTemplate;
-      state.activeTool = 'label';
       hideColorBoxPreview();
       placeFloatingLabelTemplate(text);
-      updateToolbar();
-      syncCalendarToolCursor();
+      selectTool('pointer');
     });
   }
 
